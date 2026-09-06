@@ -105,7 +105,26 @@ export function stripControlNoise(text: string): string {
 const VERB_FIRST_PATTERN =
   /\b(?:use|usa|pede|peça|pergunta|pergunte|manda|mande)\b(?:\s+(?:pro|pra|para|ao|à|o|a)\b)?\s+([\p{L}][\p{L}0-9_-]{1,39})/iu;
 
-const COM_O_PATTERN = /\bcom\s+(?:o|a)\s+([\p{L}][\p{L}0-9_-]{1,39})\b/iu;
+/**
+ * "com o/a <alias>" alone is NOT enough signal: it matches plain descriptive/
+ * reported-speech sentences just as easily as a command —
+ * "ontem falei com o Astra sobre isso", "já conversei com o Astra",
+ * "isso foi revisado com o Astra" all contain the exact same "com o <alias>"
+ * shape with zero routing intent. The one required-positive example,
+ * "com o Astra, procure falhas", has a real structural signal the negatives
+ * don't: an imperative task verb immediately follows the alias (across an
+ * optional comma). Requiring that verb (via a lookahead, so it isn't
+ * consumed/captured) is what separates a real command from a mention.
+ */
+const TASK_IMPERATIVE_VERBS =
+  "procure|verifique|analise|revise|critique|corrija|avalie|teste|confirme|valide|" +
+  "aponte|liste|resuma|explique|mostre|diga|ache|encontre|chame|pergunte|pe[çc]a|" +
+  "execute|rode|gere|crie|escreva|refatore|otimize";
+
+const COM_O_PATTERN = new RegExp(
+  `\\bcom\\s+(?:o|a)\\s+([\\p{L}][\\p{L}0-9_-]{1,39})\\s*,?\\s*(?=\\b(?:${TASK_IMPERATIVE_VERBS})\\b)`,
+  "iu"
+);
 
 /**
  * Detect an explicit-target command in already-sanitized natural-language

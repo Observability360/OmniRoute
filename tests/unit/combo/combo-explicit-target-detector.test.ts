@@ -115,6 +115,36 @@ test('detectExplicitTargetPhrase: "documentação diz para usar Astra" does not 
   assert.equal(detectExplicitTargetPhrase("documentação diz para usar Astra"), null);
 });
 
+// ── "com o <alias>" — required false-positive fix ────────────────────────────
+// "com o <alias>" alone (no imperative task verb immediately following) is
+// descriptive/reported speech, not a command, and must never trigger routing.
+
+for (const phrase of [
+  "ontem falei com o Astra sobre isso",
+  "já conversei com o Astra",
+  "isso foi revisado com o Astra",
+  "com o Astra tudo certo",
+]) {
+  test(`detectExplicitTargetPhrase: "com o" false-positive — "${phrase}" does not match`, () => {
+    assert.equal(detectExplicitTargetPhrase(phrase), null);
+  });
+}
+
+test('detectExplicitTargetPhrase: "com o Astra, procure falhas" still matches (imperative verb present)', () => {
+  assert.deepEqual(detectExplicitTargetPhrase("com o Astra, procure falhas"), { alias: "Astra" });
+});
+
+for (const phrase of [
+  "com o Astra critique o código",
+  "com o Claude, corrija os testes",
+  "com a Astra verifique isso",
+]) {
+  test(`detectExplicitTargetPhrase: "com o" + imperative verb — positive — "${phrase}"`, () => {
+    const result = detectExplicitTargetPhrase(phrase);
+    assert.ok(result, `expected a match for: ${phrase}`);
+  });
+}
+
 test('detectExplicitTargetPhrase: "a documentação recomenda usar o Claude" does not match', () => {
   assert.equal(detectExplicitTargetPhrase("a documentação recomenda usar o Claude"), null);
 });

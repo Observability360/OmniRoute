@@ -249,6 +249,56 @@ test("explicit target overrides an active context-cache pin for the same session
   );
 });
 
+test("explicit COMBO target beats an existing pin, and the old pin cannot reappear during the recursion", async () => {
+  await updateSettings({ explicitTargetAliases: { astra: "combo/critic-combo" } });
+  // A prior turn pinned main-combo to provider-a/model-a for this session.
+  recordSessionModelUsage("sess-combo-pin-test", "main-combo", "provider-a/model-a", "provider-a");
+  // critic-combo ALSO has context-cache protection on (the harder case): if
+  // the recursion guard or session threading were wrong, this combo's own
+  // phaseComboSetup could try to honor a pin too, and something might
+  // resolve back to the old provider-a/model-a — it must not, both because
+  // no pin was ever recorded for "critic-combo" specifically (pin history is
+  // keyed by (session_id, combo_name)) and because explicit-target detection
+  // is skipped on the recursed-into call (explicitTargetResolved=true), so it
+  // can never re-resolve "Astra" and re-recurse either.
+  const combos = [
+    {
+      name: "main-combo",
+      strategy: "priority",
+      models: ["provider-a/model-a"],
+      context_cache_protection: true,
+    },
+    {
+      name: "critic-combo",
+      strategy: "priority",
+      models: ["provider-c/model-c"],
+      context_cache_protection: true,
+    },
+  ];
+
+  const calls: string[] = [];
+  const res = await handleComboChat({
+    body: { messages: [{ role: "user", content: "use Astra para criticar" }] },
+    combo: combos[0],
+    relayOptions: { sessionId: "sess-combo-pin-test" },
+    handleSingleModel: async (_b: Record<string, unknown>, modelStr: string) => {
+      calls.push(modelStr);
+      return okResponse("critique");
+    },
+    isModelAvailable: async () => true,
+    log,
+    settings: null,
+    allCombos: combos,
+  });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(
+    calls,
+    ["provider-c/model-c"],
+    "critic-combo must dispatch to its OWN target — the old main-combo pin must never reappear during the recursion"
+  );
+});
+
 // ── audit trail ───────────────────────────────────────────────────────────────
 
 test("explicit override is recorded on the request's existing combo trace (no new audit subsystem)", async () => {
