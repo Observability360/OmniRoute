@@ -33,7 +33,21 @@ export const COMBO_SKIP_REASONS = [
 
 export type ComboSkipReason = (typeof COMBO_SKIP_REASONS)[number];
 
-export type ComboDecision = "dispatched" | "skipped_before_dispatch" | "not_reached";
+/**
+ * The four explicit_* values are O360 explicit-target-routing V1 additions:
+ * the prelude branch that resolves a human "use <alias>" command records one
+ * of these instead of "dispatched"/"skipped_before_dispatch"/"not_reached",
+ * which describe the normal per-target attempt loop and don't fit an
+ * override-or-fail-closed decision made before that loop even starts.
+ */
+export type ComboDecision =
+  | "dispatched"
+  | "skipped_before_dispatch"
+  | "not_reached"
+  | "explicit_override"
+  | "unknown_target"
+  | "ambiguous_target"
+  | "target_unavailable";
 
 export interface ComboTraceEntry {
   /** Safe internal identifier of the combo step (execution key). */

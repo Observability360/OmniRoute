@@ -287,6 +287,7 @@ import {
   recordQuotaExhaustionClassification,
   withQuotaExhaustionClassification,
 } from "./combo/quotaExhaustion.ts";
+import { tryExplicitTargetDispatch } from "./combo/tryExplicitTargetDispatch.ts";
 
 export { RESET_WINDOW_NAMES, QUOTA_SOFT_DEPRIORITIZE_FACTOR, setCandidateQuotaSoftPenalty };
 export { scoreAutoTargets, expandAutoComboCandidatePool };
@@ -729,6 +730,7 @@ async function handleComboChatInner({
   endpointPath = null,
   requestHeaders = null,
   invocationId,
+  explicitTargetResolved = false,
 }: HandleComboChatOptions): Promise<Response> {
   const comboCtx = createComboContext({ body, combo, settings, relayOptions, log });
   const {
@@ -762,6 +764,39 @@ async function handleComboChatInner({
       ),
     log,
   });
+
+  // O360 explicit-target routing V1: a human "use <alias>" command in the
+  // caller's own last turn beats EVERYTHING below, including the context-cache
+  // pin just resolved above. phaseComboSetup() may already have rewritten
+  // body.model for that pin — this branch simply never reads it. Implemented
+  // in combo/tryExplicitTargetDispatch.ts; returns null (falls through
+  // unchanged) when no explicit-target command is present in this request.
+  const explicitTargetDispatch = await tryExplicitTargetDispatch({
+    body,
+    combo,
+    handleSingleModel,
+    isModelAvailable,
+    log,
+    settings,
+    allCombos,
+    relayOptions,
+    signal,
+    apiKeyAllowedConnections,
+    hiddenModelsByProvider,
+    invocationId: traceInvocationId,
+    clientManagedResponsesContext,
+    perTargetAdmission,
+    deferContextOverflowWhenCompressible,
+    compressionExclusions,
+    sourceFormat,
+    endpointPath,
+    requestHeaders,
+    handleSingleModelWithTimeout,
+    maxComboDepth: config.maxComboDepth,
+    runCombo: handleComboChat,
+    explicitTargetResolved,
+  });
+  if (explicitTargetDispatch) return explicitTargetDispatch;
 
   // Dispatch prelude: context-cache pin → fusion → chaos → pipeline → nested
   // combo-ref execute mode → round-robin. Each branch either owns the request or
