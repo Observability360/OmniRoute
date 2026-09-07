@@ -1042,7 +1042,7 @@ export function formatProviderError(
 // primitive value". JSON.stringify works on any plain/null-prototype object; the nested
 // try/catch covers any other exotic shape (e.g. a circular reference) without ever throwing
 // out of a call-log side effect.
-export function stringifyErrorForLog(error: unknown): string {
+export function stringifySafe(error: unknown): string {
   if (typeof error === "string") return error.slice(0, 500);
   try {
     return JSON.stringify(error).slice(0, 500);

@@ -37,11 +37,7 @@ import {
   fetchWithTimeout,
   getConfiguredTimeout,
 } from "@/shared/utils/fetchTimeout";
-import {
-  sanitizeErrorMessage,
-  sanitizeUpstreamDetails,
-  stringifyErrorForLog,
-} from "../utils/error.ts";
+import { sanitizeErrorMessage, sanitizeUpstreamDetails, stringifySafe } from "../utils/error.ts";
 import {
   isMicrosoftDesignerWebRetiredProviderId,
   MICROSOFT_DESIGNER_WEB_RETIRED_MESSAGE,
@@ -2814,7 +2810,7 @@ export function saveImageErrorResult({
     model: `${provider}/${model}`,
     provider,
     duration: Date.now() - startTime,
-    error: stringifyErrorForLog(error),
+    error: stringifySafe(error),
     requestBody,
   }).catch(() => {});
 

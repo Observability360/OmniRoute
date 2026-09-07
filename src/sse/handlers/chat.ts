@@ -649,7 +649,6 @@ async function handleChatImplementation(
   if (imageModel && !isExactStoredCombo && !isChatCatalogModel) {
     log.warn("CHAT", `Rejecting image-generation model on chat endpoint: ${modelStr}`);
     return errorResponse(
-      // "Route " before the path uses errorPathRedaction.ts's safe-context convention (#ci-baseline-repair)
       HTTP_STATUS.BAD_REQUEST,
       `Model '${modelStr}' is an image-generation model and cannot be used on Route /v1/chat/completions. Use POST /v1/images/generations instead.`
     );

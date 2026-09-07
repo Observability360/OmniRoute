@@ -1,4 +1,5 @@
 {
+  "_rebaseline_2026_09_07_ci_baseline_repair_prettier_reflow": "fix/release-v3.8.51-ci-baseline own growth, both cases the lint-staged Prettier reflow of a pre-existing >100-col line that any touch of the file now forces into wrapped form (same class as _rebaseline_2026_09_03_12649_free_tier_reaudit_gateways): src/sse/handlers/chat.ts 2454->2457 (+3 = the registerMoonshotQuotaFetcher/registerMoonshotFetchersForNodes import wraps; reproduces on pure release/v3.8.51 via `prettier --check`, unrelated to this PR's own one-word string fix in the image-model rejection message a few hundred lines below); open-sse/utils/stream.ts 3072->3077 (+5 = two pre-existing filterUsageForFormat/costUsd call-site wraps, also reproducing on pure base; this PR's own highWaterMark parameter restore -- a faithful restore of a previously-reverted commit's plumbing -- is a net +0 once its JSDoc is condensed to a trailing comment). Covered by tests/unit/chat-rejects-image-only-model.test.ts and the highwatermark benchmark/executor suites.",
   "_rebaseline_2026_09_03_reset_aware_model_family": "Own growth: open-sse/services/combo.ts 4036->4041 (+5). buildAutoCandidates now keys the reset-aware quota cache by getQuotaFetchScope and spreads requestedModel onto the connection so Gemini windows stay off a Claude-empty Antigravity account. Irreducible wiring at the existing fetchResetAwareQuotaWithCache call site; the family helper itself lives in antigravityQuotaFamily.ts. Covered by tests/unit/reset-aware-request-scope-12600.test.ts.",
   "_rebaseline_2026_09_03_overloaded_not_provider_breaker": "fix/overloaded-not-provider-breaker own growth: open-sse/services/combo.ts 4036->4075 (check-file-size split-newline, +39). Circuit-open pre-skip now records the breaker retryAfter and, when every target was skipped that way, waits the short reset via resolveCircuitOpenWaitDecision (new leaf in comboCooldownRetry.ts) instead of crystallizing ALL_TARGETS_SKIPPED in ~43ms. skippedForCircuitOpen / earliestCircuitOpenRetryMs reset each setTry so a later iteration cannot inherit a stale retryAfter. Irreducible at the existing ALL_TARGETS_SKIPPED chokepoint (same pattern as #7301/#8213 cooldown-wait). Predicate itself lives in circuitBreaker.ts / comboPredicates.ts / chatPredicates.ts, all under cap. Covered by tests/unit/overloaded-not-provider-breaker.test.ts + combo-cooldown-retry.test.ts.",
   "_rebaseline_2026_09_03_12649_free_tier_reaudit_gateways": "PR #12649 (fix/free-tier-quota-reaudit) own growth: src/shared/constants/providers/apikey/gateways.ts 1459->1462 (+3 = the nara authHint rewritten for the re-audited 7M/day plan now wraps to two lines, plus the Prettier reflow of two pre-existing >100-col authHint lines (oneminai, freebuff) that lint-staged enforces on any touch of the file; additive text at the existing registry chokepoint, same god-file no-split rationale as prior gateways.ts rebaselines: #11786 seekai, #10987 logfare, #10531 freebuff). Covered by tests/unit/free-tier-reaudit-2026-09.test.ts and tests/unit/free-providers-batch-2026-07.test.ts.",
@@ -429,7 +430,7 @@
     "open-sse/translator/response/openai-responses.ts": 1466,
     "open-sse/utils/cursorAgentProtobuf.ts": 1547,
     "open-sse/utils/proxyFetch.ts": 1271,
-    "open-sse/utils/stream.ts": 3072,
+    "open-sse/utils/stream.ts": 3077,
     "open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/browser-worker.ts": 4398,
     "open-sse/vendor/codex-chatgpt-web/bridge.ts": 1335,
     "src/app/(dashboard)/dashboard/HomePageClient.tsx": 1344,
@@ -457,7 +458,7 @@
     "src/shared/components/RequestLoggerV2.tsx": 1718,
     "src/shared/constants/providers/apikey/gateways.ts": 1462,
     "src/shared/services/cliRuntime.ts": 1296,
-    "src/sse/handlers/chat.ts": 2454,
+    "src/sse/handlers/chat.ts": 2457,
     "src/sse/services/auth.ts": 3450,
     "tests/unit/account-fallback-service.test.ts": 2453,
     "tests/unit/provider-validation-specialty.test.ts": 4656
