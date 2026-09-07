@@ -14,6 +14,7 @@ import { QUOTA_MODEL_PREFIX } from "@/lib/quota/quotaModelNaming";
 import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
+import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 
 // Minimal shape for the fields we read off a combo row in this route.
 // `getComboById` returns a structurally `JsonRecord`-typed object, so we
@@ -248,6 +249,23 @@ export async function PUT(request, { params }) {
 
     const combo = await updateCombo(id, body);
 
+    // Config-mutation audit trail (#combo-config-audit). before=currentCombo
+    // (read at the top of this handler, pre-mutation), after=the real
+    // updateCombo() result. "admin" matches every other management-route
+    // audit caller in this codebase (no per-caller identity resolution
+    // exists here yet, not specific to combos).
+    const auditContext = getAuditRequestContext(request);
+    logAuditEvent({
+      action: "combo.update",
+      actor: "admin",
+      target: id,
+      resourceType: "combo",
+      status: "success",
+      ipAddress: auditContext.ipAddress || undefined,
+      requestId: auditContext.requestId,
+      metadata: { comboName, before: currentCombo, after: combo },
+    });
+
     // Auto sync to Cloud if enabled
     await syncToCloudIfEnabled();
 
@@ -295,6 +313,19 @@ export async function DELETE(request, { params }) {
     if (!success) {
       return comboErrorResponse("COMBO_007", 404, { id }, request);
     }
+
+    // Config-mutation audit trail (#combo-config-audit). after=null (deleted).
+    const auditContext = getAuditRequestContext(request);
+    logAuditEvent({
+      action: "combo.delete",
+      actor: "admin",
+      target: id,
+      resourceType: "combo",
+      status: "success",
+      ipAddress: auditContext.ipAddress || undefined,
+      requestId: auditContext.requestId,
+      metadata: { comboName: existingCombo.name, before: existingCombo, after: null },
+    });
 
     // Auto sync to Cloud if enabled
     await syncToCloudIfEnabled();
