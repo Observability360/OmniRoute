@@ -390,6 +390,138 @@ test("mutation failure records a FAILURE audit row, never a false SUCCESS", asyn
   assert.notEqual(row?.status, "success");
 });
 
+// ── Strict ATTEMPT carries the intended change (#combo-config-audit follow-up 2) ─
+//
+// The strict ATTEMPT already guarantees authorship before the mutation runs
+// (tests 8-10 above), but until now it carried no evidence of WHAT change
+// was intended — if the finalize SUCCESS write itself then failed (a
+// separate, non-strict best-effort write), the only surviving row would say
+// who/when but not what. These prove the ATTEMPT row now also carries the
+// intended change itself, through the same sanitizeAuditValue redaction
+// path as every other audit field.
+
+// ── 13. create attempt contains the requested combo input ──────────────────
+
+test("create: the strict ATTEMPT row contains the requested combo input", async () => {
+  const res = await combosRoute.POST(
+    post({
+      name: "audit-test-attempt-requested-create",
+      strategy: "priority",
+      models: ["openai/gpt-4o"],
+    })
+  );
+  assert.equal(res.status, 201);
+
+  // The strict ATTEMPT is written before createCombo() runs, so its target
+  // is the requested name — the real id doesn't exist yet at that point
+  // (the finalize SUCCESS row, tested elsewhere, is the one keyed by id).
+  const attemptRows = getAuditLog({
+    action: "combo.create.attempt",
+    target: "audit-test-attempt-requested-create",
+    limit: 1,
+  });
+  assert.equal(attemptRows.length, 1);
+  const metadata = attemptRows[0]?.metadata as {
+    requested?: { name?: string; strategy?: string; models?: unknown };
+  };
+  assert.equal(metadata.requested?.name, "audit-test-attempt-requested-create");
+  assert.equal(metadata.requested?.strategy, "priority");
+  assert.ok(Array.isArray(metadata.requested?.models));
+});
+
+// ── 14. update attempt contains before + requested ──────────────────────────
+
+test("update: the strict ATTEMPT row contains before and the requested change", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-attempt-requested-update",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  const res = await comboRoute.PUT(put(combo.id, { strategy: "round-robin" }), {
+    params: Promise.resolve({ id: combo.id }),
+  });
+  assert.equal(res.status, 200);
+
+  const attemptRows = getAuditLog({
+    action: "combo.update.attempt",
+    target: combo.id,
+    limit: 1,
+  });
+  assert.equal(attemptRows.length, 1);
+  const metadata = attemptRows[0]?.metadata as {
+    before?: { strategy?: string };
+    requested?: { strategy?: string };
+  };
+  assert.equal(
+    metadata.before?.strategy,
+    "priority",
+    "attempt row must carry the pre-mutation state"
+  );
+  assert.equal(
+    metadata.requested?.strategy,
+    "round-robin",
+    "attempt row must carry the intended change"
+  );
+});
+
+// ── 15. delete attempt contains before ──────────────────────────────────────
+
+test("delete: the strict ATTEMPT row contains the pre-deletion state", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-attempt-before-delete",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  const res = await comboRoute.DELETE(del(combo.id), { params: Promise.resolve({ id: combo.id }) });
+  assert.equal(res.status, 200);
+
+  const attemptRows = getAuditLog({
+    action: "combo.delete.attempt",
+    target: combo.id,
+    limit: 1,
+  });
+  assert.equal(attemptRows.length, 1);
+  const metadata = attemptRows[0]?.metadata as { before?: { name?: string } };
+  assert.equal(metadata.before?.name, "audit-test-attempt-before-delete");
+});
+
+// ── 16. secrets inside before/requested stay redacted ───────────────────────
+
+test("create/update attempt rows never leak a real secret from before/requested", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-attempt-no-secret-leak",
+    strategy: "priority",
+    models: [
+      {
+        provider: "openai",
+        model: "gpt-4o",
+        connectionId: "22222222-2222-2222-2222-222222222222",
+      },
+    ],
+  });
+
+  const res = await comboRoute.PUT(put(combo.id, { description: "audit test" }), {
+    params: Promise.resolve({ id: combo.id }),
+  });
+  assert.equal(res.status, 200);
+
+  const attemptRows = getAuditLog({
+    action: "combo.update.attempt",
+    target: combo.id,
+    limit: 1,
+  });
+  assert.equal(attemptRows.length, 1);
+  const serialized = JSON.stringify(attemptRows[0]?.metadata ?? {});
+  for (const forbidden of ["apiKey", "accessToken", "refreshToken", "idToken", "authToken"]) {
+    assert.ok(
+      !new RegExp(`"${forbidden}"\\s*:\\s*"(?!\\[redacted\\])`, "i").test(serialized),
+      `attempt row must never contain a real value for ${forbidden}`
+    );
+  }
+});
+
 // ── Real actor resolution (#combo-config-audit follow-up) ──────────────────
 //
 // These exercise the SAME auth signals requireManagementAuth() itself checks
@@ -437,7 +569,7 @@ test.after(() => {
   }
 });
 
-// ── 13. auth-disabled bypass → explicit, non-'admin' value ─────────────────
+// ── 17. auth-disabled bypass → explicit, non-'admin' value ─────────────────
 //
 // MUST run before any withAuthRequired() test below: getSettings() persists
 // setupComplete=true/requireLogin=true to this shared test DB the first time
@@ -466,7 +598,7 @@ test("auth-disabled bypass resolves to an explicit, non-'admin' actor", async ()
   assert.notEqual(row?.actor, "admin");
 });
 
-// ── 14. management API key → real actor/label ───────────────────────────────
+// ── 18. management API key → real actor/label ───────────────────────────────
 
 test("management API key produces a real, non-'admin' actor with a safe label", () =>
   withAuthRequired(async () => {
@@ -492,7 +624,7 @@ test("management API key produces a real, non-'admin' actor with a safe label", 
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 15. local CLI management token → identified ─────────────────────────────
+// ── 19. local CLI management token → identified ─────────────────────────────
 
 test("local CLI management token is identified as local-cli-token, never 'admin'", () =>
   withAuthRequired(async () => {
@@ -524,7 +656,7 @@ test("local CLI management token is identified as local-cli-token, never 'admin'
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 16. dashboard session → dashboard-session (no human identity available) ─
+// ── 20. dashboard session → dashboard-session (no human identity available) ─
 
 test("dashboard session actor is 'dashboard-session' (no human identity exists today), never 'admin'", () =>
   withAuthRequired(async () => {
@@ -559,7 +691,7 @@ test("dashboard session actor is 'dashboard-session' (no human identity exists t
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 17. trusted internal service → identified ───────────────────────────────
+// ── 21. trusted internal service → identified ───────────────────────────────
 
 test("trusted internal-service caller is identified, never 'admin'", () =>
   withAuthRequired(async () => {
@@ -590,7 +722,7 @@ test("trusted internal-service caller is identified, never 'admin'", () =>
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 18. no raw credential ever appears in the actor/metadata itself ─────────
+// ── 22. no raw credential ever appears in the actor/metadata itself ─────────
 
 test("actor resolution never embeds a raw token/key/cookie value", () =>
   withAuthRequired(async () => {
@@ -619,7 +751,7 @@ test("actor resolution never embeds a raw token/key/cookie value", () =>
     );
   }));
 
-// ── 19. unrecognised authenticated caller → explicit fallback, never 'admin' ─
+// ── 23. unrecognised authenticated caller → explicit fallback, never 'admin' ─
 
 test("an unrecognised auth-kind from the authz pipeline resolves to an explicit safe fallback", async () => {
   // A future/unrecognised AuthSubject.kind from the central authz pipeline

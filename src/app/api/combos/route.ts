@@ -135,6 +135,13 @@ export async function POST(request) {
     // that write fails. This is the one guarantee this patch makes
     // fail-closed; the finalize write below stays best-effort like every
     // other audit caller.
+    //
+    // `requested: comboInput` (#combo-config-audit follow-up 2): the ATTEMPT
+    // row carries the intended change itself, so evidence of what was about
+    // to happen survives even if the finalize SUCCESS write never lands.
+    // Goes through the same logAuditEvent/beginStrictAuditEvent
+    // serialization + sanitizeAuditValue redaction as every other audit
+    // field — no new sanitizer.
     const auditContext = getAuditRequestContext(request);
     const { actor, authKind, authLabel } = await getManagementAuditActor(request);
 
@@ -147,7 +154,7 @@ export async function POST(request) {
         resourceType: "combo",
         ipAddress: auditContext.ipAddress || undefined,
         requestId: auditContext.requestId,
-        metadata: { comboName: name, authKind, authLabel },
+        metadata: { comboName: name, authKind, authLabel, requested: comboInput },
       }));
     } catch (auditError) {
       console.error(
