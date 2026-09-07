@@ -13,7 +13,11 @@ import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { computeComboContextLength } from "@/lib/combos/comboContext";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
-import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
+import {
+  beginStrictAuditEvent,
+  getAuditRequestContext,
+  logAuditEvent,
+} from "@/lib/compliance/index";
 import { getManagementAuditActor } from "@/lib/compliance/managementAuditActor";
 
 // GET /api/combos - Get all combos
@@ -113,16 +117,63 @@ export async function POST(request) {
       return NextResponse.json({ error: dagError.message }, { status: 400 });
     }
 
-    const combo = await createCombo(comboInput);
-
     // Config-mutation audit trail (#combo-config-audit — see
     // src/lib/compliance/index.ts for the shared audit_log writer; no new
     // table, reuses the same infra provider.credentials.* actions already
     // use). Real caller identity — see managementAuditActor.ts — sourced
     // from the same auth signals requireManagementAuth() already used to
     // authenticate this request, never a hardcoded literal.
+    //
+    // Strict pre-mutation gate (#combo-config-audit follow-up — "no
+    // unattributed combo mutation"): the audit ATTEMPT must be written
+    // BEFORE the mutation, and must abort the request (no combo created) if
+    // that write fails. This is the one guarantee this patch makes
+    // fail-closed; the finalize write below stays best-effort like every
+    // other audit caller.
     const auditContext = getAuditRequestContext(request);
     const { actor, authKind, authLabel } = await getManagementAuditActor(request);
+
+    let strictRequestId: string;
+    try {
+      ({ requestId: strictRequestId } = beginStrictAuditEvent({
+        action: "combo.create",
+        actor,
+        target: name,
+        resourceType: "combo",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: auditContext.requestId,
+        metadata: { comboName: name, authKind, authLabel },
+      }));
+    } catch (auditError) {
+      console.error(
+        "[combo-config-audit] strict audit write failed — refusing to create combo:",
+        auditError
+      );
+      return comboErrorResponse("INTERNAL_001", 503, { reason: "audit_unavailable" }, request);
+    }
+
+    let combo;
+    try {
+      combo = await createCombo(comboInput);
+    } catch (mutationError) {
+      logAuditEvent({
+        action: "combo.create",
+        actor,
+        target: name,
+        resourceType: "combo",
+        status: "failure",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: strictRequestId,
+        metadata: {
+          comboName: name,
+          authKind,
+          authLabel,
+          error: mutationError instanceof Error ? mutationError.message : String(mutationError),
+        },
+      });
+      throw mutationError;
+    }
+
     logAuditEvent({
       action: "combo.create",
       actor,
@@ -130,7 +181,7 @@ export async function POST(request) {
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
-      requestId: auditContext.requestId,
+      requestId: strictRequestId,
       metadata: { comboName: name, before: null, after: combo, authKind, authLabel },
     });
 

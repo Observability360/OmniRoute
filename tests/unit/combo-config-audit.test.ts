@@ -235,6 +235,161 @@ test("no credential/secret leaks into the audit row even if present on the combo
   }
 });
 
+// ── Strict pre-mutation audit gate (#combo-config-audit follow-up) ─────────
+//
+// "No unattributed combo mutation": beginStrictAuditEvent() writes a
+// `<action>.attempt` row BEFORE the mutation runs and THROWS on failure
+// (unlike the best-effort logAuditEvent()) — the route must catch that and
+// abort without performing the mutation. These monkey-patch db.prepare() for
+// a specific SQL substring to simulate a genuine backend failure at that
+// exact boundary, the same established technique already used elsewhere in
+// this test suite (see tests/unit/api-key-reveal-route.test.ts) — not a
+// fake provider standing in for the feature under test, just a targeted
+// failure injection at the real DB call site. Runs before the
+// withAuthRequired() block below on purpose: these rely on the same
+// auth-not-required bypass tests 1-7 already use, and withAuthRequired()
+// permanently flips this shared test DB to requireLogin=true the first time
+// it runs (see the auth-disabled-bypass test's own note on that).
+
+function withPreparePatch<T>(match: string, fn: () => Promise<T>): Promise<T> {
+  const db = core.getDbInstance();
+  const originalPrepare = db.prepare.bind(db);
+  (db as unknown as { prepare: typeof db.prepare }).prepare = ((
+    sql: string,
+    ...args: unknown[]
+  ) => {
+    if (typeof sql === "string" && sql.includes(match)) {
+      throw new Error(`simulated backend failure at: ${match}`);
+    }
+    return originalPrepare(sql, ...args);
+  }) as typeof db.prepare;
+  return fn().finally(() => {
+    (db as unknown as { prepare: typeof db.prepare }).prepare = originalPrepare;
+  });
+}
+
+// ── 8. create: audit backend failure → combo NOT created ───────────────────
+
+test("create: audit backend failure aborts the mutation — combo is not created", () =>
+  withPreparePatch("INSERT INTO audit_log", async () => {
+    const res = await combosRoute.POST(
+      post({
+        name: "audit-test-strict-create-fails",
+        strategy: "priority",
+        models: ["openai/gpt-4o"],
+      })
+    );
+    assert.equal(res.status, 503);
+
+    const combo = await combosDb.getComboByName("audit-test-strict-create-fails");
+    assert.ok(!combo, "combo must not exist — the audit attempt failed before createCombo ran");
+  }));
+
+// ── 9. update: audit backend failure → previous state remains ──────────────
+
+test("update: audit backend failure aborts the mutation — previous state is unchanged", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-strict-update-fails",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  await withPreparePatch("INSERT INTO audit_log", async () => {
+    const res = await comboRoute.PUT(put(combo.id, { strategy: "round-robin" }), {
+      params: Promise.resolve({ id: combo.id }),
+    });
+    assert.equal(res.status, 503);
+  });
+
+  const after = await combosDb.getComboByName("audit-test-strict-update-fails");
+  assert.ok(after);
+  assert.equal(
+    (after as { strategy?: string }).strategy,
+    "priority",
+    "strategy must remain the pre-mutation value — updateCombo() must never have run"
+  );
+});
+
+// ── 10. delete: audit backend failure → combo remains ───────────────────────
+
+test("delete: audit backend failure aborts the mutation — combo remains", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-strict-delete-fails",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  await withPreparePatch("INSERT INTO audit_log", async () => {
+    const res = await comboRoute.DELETE(del(combo.id), {
+      params: Promise.resolve({ id: combo.id }),
+    });
+    assert.equal(res.status, 503);
+  });
+
+  const after = await combosDb.getComboByName("audit-test-strict-delete-fails");
+  assert.ok(after, "combo must still exist — deleteCombo() must never have run");
+});
+
+// ── 11. success: both the attempt and the finalized row are correct ────────
+
+test("strict gate: a successful mutation records both the attempt row and the finalized success row", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-strict-success-both-rows",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  const res = await comboRoute.PUT(put(combo.id, { strategy: "round-robin" }), {
+    params: Promise.resolve({ id: combo.id }),
+  });
+  assert.equal(res.status, 200);
+
+  const attemptRows = getAuditLog({ action: "combo.update.attempt", target: combo.id, limit: 1 });
+  assert.equal(attemptRows.length, 1);
+  assert.equal(attemptRows[0]?.status, "attempted");
+
+  const successRow = latestFor("combo.update", combo.id);
+  assert.ok(successRow);
+  assert.equal(successRow?.status, "success");
+  const metadata = successRow?.metadata as {
+    before?: { strategy?: string };
+    after?: { strategy?: string };
+  };
+  assert.equal(metadata.before?.strategy, "priority");
+  assert.equal(metadata.after?.strategy, "round-robin");
+
+  // Both rows correlate via the same requestId (attempt written first, reused
+  // for the finalize write) — proves they are the same logical mutation.
+  const attemptRow = attemptRows[0] as Record<string, unknown>;
+  const finalizeRow = successRow as Record<string, unknown>;
+  const attemptRequestId = attemptRow.requestId ?? attemptRow.request_id;
+  const finalizeRequestId = finalizeRow.requestId ?? finalizeRow.request_id;
+  assert.ok(attemptRequestId);
+  assert.equal(attemptRequestId, finalizeRequestId);
+});
+
+// ── 12. mutation failure never records a false SUCCESS ──────────────────────
+
+test("mutation failure records a FAILURE audit row, never a false SUCCESS", async () => {
+  const combo = await combosDb.createCombo({
+    name: "audit-test-strict-mutation-failure",
+    strategy: "priority",
+    models: ["openai/gpt-4o"],
+  });
+
+  await withPreparePatch("UPDATE combos SET name", async () => {
+    const res = await comboRoute.PUT(put(combo.id, { strategy: "round-robin" }), {
+      params: Promise.resolve({ id: combo.id }),
+    });
+    assert.equal(res.status, 500);
+  });
+
+  const row = latestFor("combo.update", combo.id);
+  assert.ok(row, "expected a failure row for this mutation attempt");
+  assert.equal(row?.status, "failure");
+  assert.notEqual(row?.status, "success");
+});
+
 // ── Real actor resolution (#combo-config-audit follow-up) ──────────────────
 //
 // These exercise the SAME auth signals requireManagementAuth() itself checks
@@ -282,7 +437,7 @@ test.after(() => {
   }
 });
 
-// ── 8. auth-disabled bypass → explicit, non-'admin' value ──────────────────
+// ── 13. auth-disabled bypass → explicit, non-'admin' value ─────────────────
 //
 // MUST run before any withAuthRequired() test below: getSettings() persists
 // setupComplete=true/requireLogin=true to this shared test DB the first time
@@ -311,7 +466,7 @@ test("auth-disabled bypass resolves to an explicit, non-'admin' actor", async ()
   assert.notEqual(row?.actor, "admin");
 });
 
-// ── 9. management API key → real actor/label ────────────────────────────────
+// ── 14. management API key → real actor/label ───────────────────────────────
 
 test("management API key produces a real, non-'admin' actor with a safe label", () =>
   withAuthRequired(async () => {
@@ -337,7 +492,7 @@ test("management API key produces a real, non-'admin' actor with a safe label", 
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 10. local CLI management token → identified ─────────────────────────────
+// ── 15. local CLI management token → identified ─────────────────────────────
 
 test("local CLI management token is identified as local-cli-token, never 'admin'", () =>
   withAuthRequired(async () => {
@@ -369,7 +524,7 @@ test("local CLI management token is identified as local-cli-token, never 'admin'
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 11. dashboard session → dashboard-session (no human identity available) ─
+// ── 16. dashboard session → dashboard-session (no human identity available) ─
 
 test("dashboard session actor is 'dashboard-session' (no human identity exists today), never 'admin'", () =>
   withAuthRequired(async () => {
@@ -404,7 +559,7 @@ test("dashboard session actor is 'dashboard-session' (no human identity exists t
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 12. trusted internal service → identified ───────────────────────────────
+// ── 17. trusted internal service → identified ───────────────────────────────
 
 test("trusted internal-service caller is identified, never 'admin'", () =>
   withAuthRequired(async () => {
@@ -435,7 +590,7 @@ test("trusted internal-service caller is identified, never 'admin'", () =>
     assert.notEqual(row?.actor, "admin");
   }));
 
-// ── 13. no raw credential ever appears in the actor/metadata itself ─────────
+// ── 18. no raw credential ever appears in the actor/metadata itself ─────────
 
 test("actor resolution never embeds a raw token/key/cookie value", () =>
   withAuthRequired(async () => {
@@ -464,7 +619,7 @@ test("actor resolution never embeds a raw token/key/cookie value", () =>
     );
   }));
 
-// ── 14. unrecognised authenticated caller → explicit fallback, never 'admin' ─
+// ── 19. unrecognised authenticated caller → explicit fallback, never 'admin' ─
 
 test("an unrecognised auth-kind from the authz pipeline resolves to an explicit safe fallback", async () => {
   // A future/unrecognised AuthSubject.kind from the central authz pipeline
