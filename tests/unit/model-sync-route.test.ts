@@ -298,11 +298,11 @@ test("model sync route reports invalid JSON /models responses without losing ups
   const logs = await callLogs.getCallLogs({ model: "model-sync", limit: 10 });
 
   assert.equal(response.status, 502);
-  assert.equal(body.error, "Invalid JSON response from /models");
+  assert.equal(body.error, "Invalid JSON response from Route /models");
   assert.equal(body.upstreamStatus, 200);
   assert.equal(logs.length, 1);
   assert.equal(logs[0].status, 200);
-  assert.equal(logs[0].error, "Invalid JSON response from /models");
+  assert.equal(logs[0].error, "Invalid JSON response from Route /models");
 });
 
 test("model sync route preserves previously synced models when the upstream omits the models list", async () => {

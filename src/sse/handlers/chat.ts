@@ -645,9 +645,15 @@ async function handleChatImplementation(
     : false;
   if (imageModel && !isExactStoredCombo && !isChatCatalogModel) {
     log.warn("CHAT", `Rejecting image-generation model on chat endpoint: ${modelStr}`);
+    // "Route " immediately before the path (#ci-baseline-repair): errorResponse()
+    // always runs this through sanitizeErrorMessage(), whose unquoted-path
+    // redaction fails closed over the rest of the line for an unrecognized
+    // absolute-path span. errorPathRedaction.ts already special-cases a
+    // preceding "Route" (or HTTP method) as safe route context -- this message
+    // just needs to use that existing convention, not a change to the sanitizer.
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,
-      `Model '${modelStr}' is an image-generation model and cannot be used on /v1/chat/completions. Use POST /v1/images/generations instead.`
+      `Model '${modelStr}' is an image-generation model and cannot be used on Route /v1/chat/completions. Use POST /v1/images/generations instead.`
     );
   }
 

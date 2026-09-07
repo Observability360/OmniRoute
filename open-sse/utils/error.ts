@@ -282,6 +282,7 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "vision",
   "claude_web_protocol_error",
   "wreq_unavailable",
+  "zai_stream_error",
 ]);
 
 function isSafePublicErrorIdentifier(value: string): boolean {
