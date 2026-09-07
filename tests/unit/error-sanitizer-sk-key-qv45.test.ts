@@ -27,7 +27,11 @@ const LEAKY_BODIES = [
   "Incorrect API key provided: sk-proj-AbCdEfGhIjKlMnOpQrStUv. You can find your API key at …",
   "401 Unauthorized: sk-ant-api03-abcdefghijklmnopqrstuvwxyz-1234567890",
   "invalid key sk_live_51H8xKzAbCdEfGhIjKlMn",
-  "Bad credentials for AIzaSyA1B2C3D4E5F6G7H8I9J0KaLbMcNdOeP",
+  // (#ci-baseline-repair) real Google API keys are exactly 39 chars total
+  // (AIza + 35) -- credentialPatterns.ts's "google" entry matches that exact
+  // length. This fixture was 2 chars short, so it never matched the real
+  // pattern in the first place (not a redaction bug).
+  "Bad credentials for AIzaSyA1B2C3D4E5F6G7H8I9J0KaLbMcNdOePQr",
   "token rejected: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
 ];
 

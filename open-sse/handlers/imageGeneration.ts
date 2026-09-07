@@ -2778,6 +2778,26 @@ export function saveImageSuccessResult({
   };
 }
 
+// (#ci-baseline-repair) `error` here can be a sanitizeUpstreamDetails() result
+// -- deliberately an Object.create(null) object (prototype-pollution guard,
+// see errorSanitization.ts), which has no Object.prototype.toString and makes
+// plain `String(error)` throw "Cannot convert object to primitive value".
+// JSON.stringify works on any plain/null-prototype object; the try/catch
+// covers any other exotic shape (e.g. a circular reference) without ever
+// throwing out of a call-log side effect.
+function stringifyImageErrorForLog(error: unknown): string {
+  if (typeof error === "string") return error.slice(0, 500);
+  try {
+    return JSON.stringify(error).slice(0, 500);
+  } catch {
+    try {
+      return String(error).slice(0, 500);
+    } catch {
+      return "[unserializable error]";
+    }
+  }
+}
+
 export function saveImageErrorResult({
   provider,
   model,
@@ -2810,7 +2830,7 @@ export function saveImageErrorResult({
     model: `${provider}/${model}`,
     provider,
     duration: Date.now() - startTime,
-    error: typeof error === "string" ? error.slice(0, 500) : String(error).slice(0, 500),
+    error: stringifyImageErrorForLog(error),
     requestBody,
   }).catch(() => {});
 
