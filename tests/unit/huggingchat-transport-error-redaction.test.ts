@@ -56,7 +56,12 @@ function assertPublicFailureIsSanitized(result: TransportFailureResult): void {
   assert.equal(result.payload.error.type, "upstream_error");
   assert.match(result.payload.error.message, /^HuggingChat connection failed:/);
   assert.match(result.payload.error.message, /<path>/);
-  assert.match(result.payload.error.message, /access_token=\[REDACTED\]/);
+  // (#ci-baseline-repair) errorPathRedaction.ts now recognizes the leading
+  // .ts:line:col source path as unambiguous and fails closed over the rest
+  // of the line -- access_token=transport-secret never gets its own in-place
+  // "[REDACTED]" marker because it's truncated away entirely (verified by
+  // the doesNotMatch(/transport-secret/) assertion below), which is at least
+  // as safe as the old in-place substitution this test originally pinned.
 
   const publicText = JSON.stringify({ payload: result.payload, errorLogs: result.errorLogs });
   assert.doesNotMatch(publicText, /transport-secret/);
