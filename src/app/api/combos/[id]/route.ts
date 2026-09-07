@@ -262,6 +262,13 @@ export async function PUT(request, { params }) {
     // unattributed combo mutation"): the audit ATTEMPT must be written
     // BEFORE the mutation and must abort the request (previous combo state
     // untouched) if that write fails.
+    //
+    // `before`/`requested` (#combo-config-audit follow-up 2): the ATTEMPT
+    // row carries the pre-mutation state and the exact normalized body about
+    // to be passed to updateCombo(), so evidence of the intended change
+    // survives even if the finalize SUCCESS write never lands. Same
+    // serialization + sanitizeAuditValue redaction as every other audit
+    // field — no new sanitizer.
     const auditContext = getAuditRequestContext(request);
     const { actor, authKind, authLabel } = await getManagementAuditActor(request);
 
@@ -274,7 +281,7 @@ export async function PUT(request, { params }) {
         resourceType: "combo",
         ipAddress: auditContext.ipAddress || undefined,
         requestId: auditContext.requestId,
-        metadata: { comboName, authKind, authLabel },
+        metadata: { comboName, authKind, authLabel, before: currentCombo, requested: body },
       }));
     } catch (auditError) {
       console.error(
@@ -366,6 +373,12 @@ export async function DELETE(request, { params }) {
     // unattributed combo mutation"): the audit ATTEMPT must be written
     // BEFORE the mutation and must abort the request (combo not deleted) if
     // that write fails.
+    //
+    // `before: existingCombo` (#combo-config-audit follow-up 2): the ATTEMPT
+    // row carries the full pre-deletion state, so evidence of what was about
+    // to be deleted survives even if the finalize SUCCESS write never
+    // lands. Same serialization + sanitizeAuditValue redaction as every
+    // other audit field — no new sanitizer.
     const auditContext = getAuditRequestContext(request);
     const { actor, authKind, authLabel } = await getManagementAuditActor(request);
 
@@ -378,7 +391,7 @@ export async function DELETE(request, { params }) {
         resourceType: "combo",
         ipAddress: auditContext.ipAddress || undefined,
         requestId: auditContext.requestId,
-        metadata: { comboName: existingCombo.name, authKind, authLabel },
+        metadata: { comboName: existingCombo.name, authKind, authLabel, before: existingCombo },
       }));
     } catch (auditError) {
       console.error(
