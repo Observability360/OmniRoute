@@ -180,8 +180,7 @@ type StreamOptions = {
    * codex-compatible `namespace` + `name` fields.
    */
   requestToolIdentityMap?: Map<string, { namespace: string; name: string }> | null;
-  /** High water mark for the TransformStream internal buffer (default: 16384) */
-  highWaterMark?: number;
+  highWaterMark?: number; // TransformStream internal buffer high water mark (default: 16384)
 };
 
 type TranslateState = ReturnType<typeof initState> & {
@@ -1082,7 +1081,8 @@ export function createSSEStream(options: StreamOptions = {}) {
       cacheHit: false,
       latencyMs: Date.now() - streamStartedAt,
       usage: timing.withTps(finalUsage),
-      costUsd, ttftMs: timing.ttftMs(),
+      costUsd,
+      ttftMs: timing.ttftMs(),
     });
     if (!comment) return;
     reqLogger?.appendConvertedChunk?.(comment);
@@ -2050,7 +2050,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                   // estimate is now emitted in flush(), only when the upstream stayed silent.
                   if (isFinishChunk && hasValidUsage(usage) && !passthroughForwardedUsage) {
                     const buffered = addBufferToUsage(usage);
-                    parsed.usage = timing.withTps(filterUsageForFormat(buffered, sourceFormat || FORMATS.OPENAI));
+                    parsed.usage = timing.withTps(
+                      filterUsageForFormat(buffered, sourceFormat || FORMATS.OPENAI)
+                    );
                     output = `data: ${JSON.stringify(parsed)}\n\n`;
                     passthroughForwardedUsage = true;
                     injectedUsage = true;
@@ -2575,7 +2577,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                   created: Math.floor(Date.now() / 1000),
                   model,
                   choices: [],
-                  usage: timing.withTps(filterUsageForFormat(usage, sourceFormat || FORMATS.OPENAI)),
+                  usage: timing.withTps(
+                    filterUsageForFormat(usage, sourceFormat || FORMATS.OPENAI)
+                  ),
                 };
                 const usageOutput = `data: ${JSON.stringify(usageOnlyChunk)}\n\n`;
                 reqLogger?.appendConvertedChunk?.(usageOutput);

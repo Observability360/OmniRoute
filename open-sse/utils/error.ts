@@ -1035,3 +1035,22 @@ export function formatProviderError(
     causeCode || causeMsg ? ` (cause: ${[causeCode, causeMsg].filter(Boolean).join(": ")})` : "";
   return `[${code}]: ${message}${causeStr}`;
 }
+
+// (#ci-baseline-repair) `error` can be a sanitizeUpstreamDetails() result -- deliberately an
+// Object.create(null) object (prototype-pollution guard, see errorSanitization.ts), which has
+// no Object.prototype.toString and makes plain String(error) throw "Cannot convert object to
+// primitive value". JSON.stringify works on any plain/null-prototype object; the nested
+// try/catch covers any other exotic shape (e.g. a circular reference) without ever throwing
+// out of a call-log side effect.
+export function stringifyErrorForLog(error: unknown): string {
+  if (typeof error === "string") return error.slice(0, 500);
+  try {
+    return JSON.stringify(error).slice(0, 500);
+  } catch {
+    try {
+      return String(error).slice(0, 500);
+    } catch {
+      return "[unserializable error]";
+    }
+  }
+}

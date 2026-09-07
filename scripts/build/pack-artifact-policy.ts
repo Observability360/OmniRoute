@@ -91,6 +91,9 @@ export const PACK_ARTIFACT_ALLOWED_PATH_PREFIXES: string[] = APP_STAGING_ALLOWED
 
 export const PACK_ARTIFACT_ROOT_ALLOWED_EXACT_PATHS: string[] = [
   ".env.example",
+  // #ci-baseline-repair: already in package.json "files"; this allowlist just never
+  // got the matching entry (only surfaces as unexpected under some npm versions).
+  ".npmrc",
   "LICENSE",
   "README.md",
   "THIRD_PARTY_NOTICES.md",
@@ -169,6 +172,10 @@ export const PACK_ARTIFACT_ROOT_ALLOWED_EXACT_PATHS: string[] = [
 
 export const PACK_ARTIFACT_ROOT_ALLOWED_PATH_PREFIXES: string[] = [
   "@omniroute/opencode-plugin/",
+  // #ci-baseline-repair: opencode-plugin-v2 ships the same way as opencode-plugin (same
+  // source-tree structure, both covered by the blanket "@omniroute/" package.json "files"
+  // entry) -- this allowlist just never got the sibling entry when the v2 package landed.
+  "@omniroute/opencode-plugin-v2/",
   "@omniroute/opencode-provider/",
   "bin/cli/",
   // Broad open-sse + src source dirs added to package.json "files" in v3.8.21
