@@ -14,7 +14,11 @@ import { QUOTA_MODEL_PREFIX } from "@/lib/quota/quotaModelNaming";
 import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
-import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
+import {
+  beginStrictAuditEvent,
+  getAuditRequestContext,
+  logAuditEvent,
+} from "@/lib/compliance/index";
 import { getManagementAuditActor } from "@/lib/compliance/managementAuditActor";
 
 // Minimal shape for the fields we read off a combo row in this route.
@@ -248,15 +252,60 @@ export async function PUT(request, { params }) {
       }
     }
 
-    const combo = await updateCombo(id, body);
-
     // Config-mutation audit trail (#combo-config-audit). before=currentCombo
     // (read at the top of this handler, pre-mutation), after=the real
     // updateCombo() result. Real caller identity — see
     // managementAuditActor.ts — sourced from the same auth signals
     // requireManagementAuth() already used to authenticate this request.
+    //
+    // Strict pre-mutation gate (#combo-config-audit follow-up — "no
+    // unattributed combo mutation"): the audit ATTEMPT must be written
+    // BEFORE the mutation and must abort the request (previous combo state
+    // untouched) if that write fails.
     const auditContext = getAuditRequestContext(request);
     const { actor, authKind, authLabel } = await getManagementAuditActor(request);
+
+    let strictRequestId: string;
+    try {
+      ({ requestId: strictRequestId } = beginStrictAuditEvent({
+        action: "combo.update",
+        actor,
+        target: id,
+        resourceType: "combo",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: auditContext.requestId,
+        metadata: { comboName, authKind, authLabel },
+      }));
+    } catch (auditError) {
+      console.error(
+        "[combo-config-audit] strict audit write failed — refusing to update combo:",
+        auditError
+      );
+      return comboErrorResponse("INTERNAL_001", 503, { reason: "audit_unavailable" }, request);
+    }
+
+    let combo;
+    try {
+      combo = await updateCombo(id, body);
+    } catch (mutationError) {
+      logAuditEvent({
+        action: "combo.update",
+        actor,
+        target: id,
+        resourceType: "combo",
+        status: "failure",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: strictRequestId,
+        metadata: {
+          comboName,
+          authKind,
+          authLabel,
+          error: mutationError instanceof Error ? mutationError.message : String(mutationError),
+        },
+      });
+      throw mutationError;
+    }
+
     logAuditEvent({
       action: "combo.update",
       actor,
@@ -264,7 +313,7 @@ export async function PUT(request, { params }) {
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
-      requestId: auditContext.requestId,
+      requestId: strictRequestId,
       metadata: { comboName, before: currentCombo, after: combo, authKind, authLabel },
     });
 
@@ -310,16 +359,76 @@ export async function DELETE(request, { params }) {
         request
       );
     }
-    const success = await deleteCombo(id);
+    // Config-mutation audit trail (#combo-config-audit). after=null (deleted).
+    // Real caller identity — see managementAuditActor.ts.
+    //
+    // Strict pre-mutation gate (#combo-config-audit follow-up — "no
+    // unattributed combo mutation"): the audit ATTEMPT must be written
+    // BEFORE the mutation and must abort the request (combo not deleted) if
+    // that write fails.
+    const auditContext = getAuditRequestContext(request);
+    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
+
+    let strictRequestId: string;
+    try {
+      ({ requestId: strictRequestId } = beginStrictAuditEvent({
+        action: "combo.delete",
+        actor,
+        target: id,
+        resourceType: "combo",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: auditContext.requestId,
+        metadata: { comboName: existingCombo.name, authKind, authLabel },
+      }));
+    } catch (auditError) {
+      console.error(
+        "[combo-config-audit] strict audit write failed — refusing to delete combo:",
+        auditError
+      );
+      return comboErrorResponse("INTERNAL_001", 503, { reason: "audit_unavailable" }, request);
+    }
+
+    let success: boolean;
+    try {
+      success = await deleteCombo(id);
+    } catch (mutationError) {
+      logAuditEvent({
+        action: "combo.delete",
+        actor,
+        target: id,
+        resourceType: "combo",
+        status: "failure",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: strictRequestId,
+        metadata: {
+          comboName: existingCombo.name,
+          authKind,
+          authLabel,
+          error: mutationError instanceof Error ? mutationError.message : String(mutationError),
+        },
+      });
+      throw mutationError;
+    }
 
     if (!success) {
+      logAuditEvent({
+        action: "combo.delete",
+        actor,
+        target: id,
+        resourceType: "combo",
+        status: "failure",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: strictRequestId,
+        metadata: {
+          comboName: existingCombo.name,
+          authKind,
+          authLabel,
+          error: "deleteCombo returned false",
+        },
+      });
       return comboErrorResponse("COMBO_007", 404, { id }, request);
     }
 
-    // Config-mutation audit trail (#combo-config-audit). after=null (deleted).
-    // Real caller identity — see managementAuditActor.ts.
-    const auditContext = getAuditRequestContext(request);
-    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
     logAuditEvent({
       action: "combo.delete",
       actor,
@@ -327,7 +436,7 @@ export async function DELETE(request, { params }) {
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
-      requestId: auditContext.requestId,
+      requestId: strictRequestId,
       metadata: {
         comboName: existingCombo.name,
         before: existingCombo,
