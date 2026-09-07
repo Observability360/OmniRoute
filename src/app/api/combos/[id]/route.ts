@@ -15,6 +15,7 @@ import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
+import { getManagementAuditActor } from "@/lib/compliance/managementAuditActor";
 
 // Minimal shape for the fields we read off a combo row in this route.
 // `getComboById` returns a structurally `JsonRecord`-typed object, so we
@@ -251,19 +252,20 @@ export async function PUT(request, { params }) {
 
     // Config-mutation audit trail (#combo-config-audit). before=currentCombo
     // (read at the top of this handler, pre-mutation), after=the real
-    // updateCombo() result. "admin" matches every other management-route
-    // audit caller in this codebase (no per-caller identity resolution
-    // exists here yet, not specific to combos).
+    // updateCombo() result. Real caller identity — see
+    // managementAuditActor.ts — sourced from the same auth signals
+    // requireManagementAuth() already used to authenticate this request.
     const auditContext = getAuditRequestContext(request);
+    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
     logAuditEvent({
       action: "combo.update",
-      actor: "admin",
+      actor,
       target: id,
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
       requestId: auditContext.requestId,
-      metadata: { comboName, before: currentCombo, after: combo },
+      metadata: { comboName, before: currentCombo, after: combo, authKind, authLabel },
     });
 
     // Auto sync to Cloud if enabled
@@ -315,16 +317,24 @@ export async function DELETE(request, { params }) {
     }
 
     // Config-mutation audit trail (#combo-config-audit). after=null (deleted).
+    // Real caller identity — see managementAuditActor.ts.
     const auditContext = getAuditRequestContext(request);
+    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
     logAuditEvent({
       action: "combo.delete",
-      actor: "admin",
+      actor,
       target: id,
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
       requestId: auditContext.requestId,
-      metadata: { comboName: existingCombo.name, before: existingCombo, after: null },
+      metadata: {
+        comboName: existingCombo.name,
+        before: existingCombo,
+        after: null,
+        authKind,
+        authLabel,
+      },
     });
 
     // Auto sync to Cloud if enabled

@@ -19,6 +19,7 @@ import { computeComboContextLength } from "@/lib/combos/comboContext";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
+import { getManagementAuditActor } from "@/lib/compliance/managementAuditActor";
 
 // GET /api/combos - Get all combos
 export async function GET(request: Request) {
@@ -122,19 +123,20 @@ export async function POST(request) {
     // Config-mutation audit trail (#combo-config-audit — see
     // src/lib/compliance/index.ts for the shared audit_log writer; no new
     // table, reuses the same infra provider.credentials.* actions already
-    // use). "admin" matches every other management-route caller in this
-    // codebase — no per-caller identity resolution exists yet anywhere, not
-    // just here; not inventing one for combos alone.
+    // use). Real caller identity — see managementAuditActor.ts — sourced
+    // from the same auth signals requireManagementAuth() already used to
+    // authenticate this request, never a hardcoded literal.
     const auditContext = getAuditRequestContext(request);
+    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
     logAuditEvent({
       action: "combo.create",
-      actor: "admin",
+      actor,
       target: combo?.id ? String(combo.id) : name,
       resourceType: "combo",
       status: "success",
       ipAddress: auditContext.ipAddress || undefined,
       requestId: auditContext.requestId,
-      metadata: { comboName: name, before: null, after: combo },
+      metadata: { comboName: name, before: null, after: combo, authKind, authLabel },
     });
 
     // Auto sync to Cloud if enabled
