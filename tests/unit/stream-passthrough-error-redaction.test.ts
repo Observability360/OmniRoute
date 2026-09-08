@@ -80,14 +80,16 @@ test("translated root error frames notify onFailure and terminate with a public-
     "translate"
   );
 
-  assert.ok(result.error, "a translated upstream error must terminate the stream");
+  // (#5) The stream terminates via controller.terminate(), not a rejection --
+  // result.error is always null now; the enqueued formatted error still reaches
+  // result.output, which is what actually matters and is asserted below.
+  assert.equal(result.error, null, "a translated upstream error must terminate cleanly");
   assert.match(result.output, /event: error/);
   assertNoHostileDetail(result.output);
   assertNoHostileDetail(convertedLog.join("\n"));
   assert.ok(result.failure, "translated failures must reach the internal classifier");
   assert.match(result.failure.message, /private-runtime\.ts/);
   assert.equal(result.failure.code, "opaque-provider-code");
-  assertNoHostileDetail(String(result.error));
 });
 
 test("translated failed response.completed events cannot become successful Chat completions", async () => {
@@ -114,7 +116,12 @@ test("translated failed response.completed events cannot become successful Chat 
     FORMATS.OPENAI_RESPONSES
   );
 
-  assert.ok(result.error, "a failed Responses completion must terminate translated Chat output");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(
+    result.error,
+    null,
+    "a failed Responses completion must terminate translated Chat output cleanly"
+  );
   assert.match(result.output, /"error"/);
   assert.doesNotMatch(result.output, /"finish_reason":"stop"/);
   assertNoHostileDetail(result.output);
@@ -122,7 +129,6 @@ test("translated failed response.completed events cannot become successful Chat 
   assert.ok(result.failure, "the translated failure must reach fallback classification");
   assert.equal(result.failure.code, "translated_completed_failure");
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("a translated failed response.completed tail without a newline still terminates", async () => {
@@ -148,7 +154,12 @@ test("a translated failed response.completed tail without a newline still termin
     FORMATS.OPENAI_RESPONSES
   );
 
-  assert.ok(result.error, "a buffered failed Responses completion must terminate in flush");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(
+    result.error,
+    null,
+    "a buffered failed Responses completion must terminate cleanly in flush"
+  );
   assert.match(result.output, /"error"/);
   assert.doesNotMatch(result.output, /"finish_reason":"stop"/);
   assertNoHostileDetail(result.output);
@@ -156,7 +167,6 @@ test("a translated failed response.completed tail without a newline still termin
   assert.ok(result.failure);
   assert.equal(result.failure.code, "translated_completed_tail_failure");
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("Responses response.failed is projected before forwarding, logging, and onFailure", async () => {
@@ -280,7 +290,8 @@ test("Responses response.failed is projected before forwarding, logging, and onF
     convertedLog
   );
 
-  assert.ok(result.error, "a failed Responses event must terminate the stream");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "a failed Responses event must terminate cleanly");
   assert.match(result.output, /response\.failed/);
   assert.match(result.output, /"last_error":\{/);
   assert.match(result.output, /safe partial output/);
@@ -302,7 +313,6 @@ test("Responses response.failed is projected before forwarding, logging, and onF
   );
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("failed response.completed events omit provider-only diagnostic siblings", async () => {
@@ -331,7 +341,8 @@ test("failed response.completed events omit provider-only diagnostic siblings", 
     convertedLog
   );
 
-  assert.ok(result.error, "a failed response.completed event must terminate the stream");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "a failed response.completed event must terminate cleanly");
   assert.match(result.output, /"type":"response\.completed"/);
   assert.match(result.output, /"id":"resp_failed_completed"/);
   assert.match(result.output, /"created_at":1777777777/);
@@ -342,7 +353,6 @@ test("failed response.completed events omit provider-only diagnostic siblings", 
   assert.doesNotMatch(convertedLog.join("\n"), /"diagnosis"|"settings"/);
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("OpenAI root error frames without a top-level type remain failures after projection", async () => {
@@ -361,13 +371,13 @@ test("OpenAI root error frames without a top-level type remain failures after pr
     convertedLog
   );
 
-  assert.ok(result.error, "an OpenAI error envelope must terminate the stream");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "an OpenAI error envelope must terminate cleanly");
   assert.match(result.output, /"error"/);
   assertNoHostileDetail(result.output);
   assertNoHostileDetail(convertedLog.join("\n"));
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("OpenAI string error frames preserve raw classification but publish only safe text", async () => {
@@ -381,12 +391,12 @@ test("OpenAI string error frames preserve raw classification but publish only sa
     convertedLog
   );
 
-  assert.ok(result.error, "a string OpenAI error must terminate the stream");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "a string OpenAI error must terminate cleanly");
   assertNoHostileDetail(result.output);
   assertNoHostileDetail(convertedLog.join("\n"));
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("Claude type:error is projected before forwarding and terminates the stream", async () => {
@@ -407,13 +417,13 @@ test("Claude type:error is projected before forwarding and terminates the stream
     convertedLog
   );
 
-  assert.ok(result.error, "a Claude error event must terminate the stream");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "a Claude error event must terminate cleanly");
   assert.match(result.output, /event: error/);
   assertNoHostileDetail(result.output);
   assertNoHostileDetail(convertedLog.join("\n"));
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });
 
 test("a final response.failed frame without a trailing newline is projected before flush", async () => {
@@ -436,11 +446,11 @@ test("a final response.failed frame without a trailing newline is projected befo
     convertedLog
   );
 
-  assert.ok(result.error, "a buffered failed event must terminate during flush");
+  // (#5) See the first test above: terminates cleanly now, result.error is null.
+  assert.equal(result.error, null, "a buffered failed event must terminate cleanly during flush");
   assert.match(result.output, /response\.failed/);
   assertNoHostileDetail(result.output);
   assertNoHostileDetail(convertedLog.join("\n"));
   assert.ok(result.failure);
   assert.match(result.failure.message, /private-runtime\.ts/);
-  assertNoHostileDetail(String(result.error));
 });

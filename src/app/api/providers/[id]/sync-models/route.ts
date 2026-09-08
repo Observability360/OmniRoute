@@ -93,7 +93,12 @@ async function readJsonResponse(response: Response): Promise<{
   if (!body.trim()) {
     return {
       data: {},
-      parseError: "Empty response body from /models",
+      // "Route " prefix (#ci-baseline-repair): this message is later run
+      // through sanitizeErrorMessage/sanitizeErrorForLog on the call-log path,
+      // whose unquoted-path redaction fails closed on an unrecognized absolute
+      // path span. errorPathRedaction.ts already treats a preceding "Route"
+      // as safe context -- match that existing convention here.
+      parseError: "Empty response body from Route /models",
     };
   }
 
@@ -105,7 +110,7 @@ async function readJsonResponse(response: Response): Promise<{
   } catch {
     return {
       data: {},
-      parseError: "Invalid JSON response from /models",
+      parseError: "Invalid JSON response from Route /models",
     };
   }
 }

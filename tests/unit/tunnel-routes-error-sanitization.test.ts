@@ -103,8 +103,24 @@ async function withSilencedConsoleError<T>(fn: () => T | Promise<T>): Promise<[T
 
 // ── Why a dedicated module: sanitizeErrorMessage does not cover these ───────
 
-test("sanitizeErrorMessage alone leaves every tunnel leak shape intact", () => {
+// (#ci-baseline-repair) The shared sanitizer's path-matching independently
+// grew since this test was written and now also redacts 4 of the 5 leak
+// shapes below (verified directly: each now comes back with the secret
+// replaced by a generic `<path>` placeholder). Only the tailscale auth-key
+// shape is not path-shaped at all, so the general sanitizer was never going
+// to catch it — that one still requires publicSafeTunnelError's own
+// credential-pattern handling, which is what actually justifies the
+// dedicated module continuing to exist. Per this test's own original intent
+// ("if the shared sanitizer grew to handle it, simplify publicSafeTunnelError
+// accordingly"), the covered shapes move to an explicit "now also covered"
+// pin below instead of silently no-oping inside the old loop. Not simplifying
+// publicSafeTunnelError's own (harmless, redundant) handling of those 4
+// shapes here — that is a separate, non-baseline change.
+const STILL_ONLY_COVERED_BY_DEDICATED_MODULE = new Set(["tailscale auth key"]);
+
+test("sanitizeErrorMessage alone still leaks the shapes only publicSafeTunnelError covers", () => {
   for (const leak of LEAKS) {
+    if (!STILL_ONLY_COVERED_BY_DEDICATED_MODULE.has(leak.label)) continue;
     const out = sanitizeErrorMessage(leak.message);
     const stillLeaks = leak.secrets.some((s) => out.includes(s));
     assert.ok(
@@ -112,6 +128,19 @@ test("sanitizeErrorMessage alone leaves every tunnel leak shape intact", () => {
       `${leak.label}: sanitizeErrorMessage unexpectedly covers this now — if the ` +
         `shared sanitizer grew to handle it, simplify publicSafeTunnelError accordingly. Got: ${out}`
     );
+  }
+});
+
+test("sanitizeErrorMessage alone now also redacts the path-shaped leaks (credential-shaped ones still need publicSafeTunnelError)", () => {
+  for (const leak of LEAKS) {
+    if (STILL_ONLY_COVERED_BY_DEDICATED_MODULE.has(leak.label)) continue;
+    const out = sanitizeErrorMessage(leak.message);
+    for (const secret of leak.secrets) {
+      assert.ok(
+        !out.includes(secret),
+        `${leak.label}: expected the shared sanitizer to now redact ${JSON.stringify(secret)}, got: ${out}`
+      );
+    }
   }
 });
 

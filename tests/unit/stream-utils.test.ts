@@ -1285,48 +1285,47 @@ test("buildStreamSummaryFromEvents falls back to response.output_text.delta when
 test("createSSEStream translate mode aborts on Responses failure with rate limit error", async () => {
   let onCompletePayload = null;
 
-  await assert.rejects(
-    readTransformed(
-      [
-        `data: ${JSON.stringify({
-          type: "response.created",
-          response: {
-            id: "resp_fail",
-            object: "response",
-            model: "gpt-5.4",
-            status: "in_progress",
-            output: [],
-          },
-        })}\n\n`,
-        `data: ${JSON.stringify({
-          type: "response.failed",
-          response: {
-            id: "resp_fail",
-            object: "response",
-            model: "gpt-5.4",
-            status: "failed",
-            error: {
-              message: "Rate limit reached for gpt-5.4",
-              code: "rate_limit_exceeded",
-            },
-          },
-        })}\n\n`,
-        `data: [DONE]\n\n`,
-      ],
-      {
-        mode: "translate",
-        targetFormat: FORMATS.OPENAI_RESPONSES,
-        sourceFormat: FORMATS.OPENAI,
-        provider: "codex",
-        model: "gpt-5.4",
-        body: { messages: [{ role: "user", content: "hello" }] },
-        onComplete(payload) {
-          onCompletePayload = payload;
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
+  const text = await readTransformed(
+    [
+      `data: ${JSON.stringify({
+        type: "response.created",
+        response: {
+          id: "resp_fail",
+          object: "response",
+          model: "gpt-5.4",
+          status: "in_progress",
+          output: [],
         },
-      }
-    ),
-    /Rate limit reached for gpt-5\.4|Upstream failure/
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "response.failed",
+        response: {
+          id: "resp_fail",
+          object: "response",
+          model: "gpt-5.4",
+          status: "failed",
+          error: {
+            message: "Rate limit reached for gpt-5.4",
+            code: "rate_limit_exceeded",
+          },
+        },
+      })}\n\n`,
+      `data: [DONE]\n\n`,
+    ],
+    {
+      mode: "translate",
+      targetFormat: FORMATS.OPENAI_RESPONSES,
+      sourceFormat: FORMATS.OPENAI,
+      provider: "codex",
+      model: "gpt-5.4",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      onComplete(payload) {
+        onCompletePayload = payload;
+      },
+    }
   );
+  assert.match(text, /Rate limit reached for gpt-5\.4|Upstream failure/);
 
   assert.ok(onCompletePayload, "should capture completion payload before aborting");
   assert.equal(onCompletePayload.status, 429);
@@ -1685,44 +1684,43 @@ test("createSSEStream passthrough merges Claude usage chunks and restores mapped
 test("#3685 createSSEStream passthrough emits SSE error (not synthetic text) for empty Claude assistant SSE", async () => {
   let failurePayload = null;
   let completePayload = null;
-  await assert.rejects(
-    readTransformed(
-      [
-        `event: message_start\ndata: ${JSON.stringify({
-          type: "message_start",
-          message: {
-            id: "msg_empty_passthrough",
-            type: "message",
-            role: "assistant",
-            model: "claude-sonnet-4",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 7, output_tokens: 0 },
-          },
-        })}\n\n`,
-        `event: message_stop\ndata: ${JSON.stringify({
-          type: "message_stop",
-        })}\n\n`,
-      ],
-      {
-        mode: "passthrough",
-        sourceFormat: FORMATS.CLAUDE,
-        provider: "claude",
-        model: "claude-sonnet-4",
-        body: {
-          messages: [{ role: "user", content: "hello" }],
+  // (#5) terminate() now delivers the already-enqueued event: error frame instead of discarding it via error().
+  const text = await readTransformed(
+    [
+      `event: message_start\ndata: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          id: "msg_empty_passthrough",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-4",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 7, output_tokens: 0 },
         },
-        onFailure(payload) {
-          failurePayload = payload;
-        },
-        onComplete(payload) {
-          completePayload = payload;
-        },
-      }
-    ),
-    /empty response/i
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({
+        type: "message_stop",
+      })}\n\n`,
+    ],
+    {
+      mode: "passthrough",
+      sourceFormat: FORMATS.CLAUDE,
+      provider: "claude",
+      model: "claude-sonnet-4",
+      body: {
+        messages: [{ role: "user", content: "hello" }],
+      },
+      onFailure(payload) {
+        failurePayload = payload;
+      },
+      onComplete(payload) {
+        completePayload = payload;
+      },
+    }
   );
+  assert.match(text, /empty response/i);
   assert.ok(failurePayload, "onFailure should be called");
   assert.equal(failurePayload.status, 502);
   assert.match(failurePayload.message, /empty response/i);
@@ -1792,44 +1790,43 @@ test("createSSEStream passthrough does not emit [DONE] for Claude SSE clients", 
 test("#3685 createSSEStream translate mode emits SSE error (not synthetic text) when OpenAI upstream finishes empty for Claude client", async () => {
   let failurePayload = null;
   let completePayload = null;
-  await assert.rejects(
-    readTransformed(
-      [
-        `data: ${JSON.stringify({
-          id: "chatcmpl_empty_1",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "gpt-4.1-mini",
-          choices: [{ index: 0, delta: { role: "assistant" } }],
-        })}\n\n`,
-        `data: ${JSON.stringify({
-          id: "chatcmpl_empty_1",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "gpt-4.1-mini",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3 },
-        })}\n\n`,
-      ],
-      {
-        mode: "translate",
-        targetFormat: FORMATS.OPENAI,
-        sourceFormat: FORMATS.CLAUDE,
-        provider: "openai",
+  // (#5) terminate() now delivers the already-enqueued event: error frame instead of discarding it via error().
+  const text = await readTransformed(
+    [
+      `data: ${JSON.stringify({
+        id: "chatcmpl_empty_1",
+        object: "chat.completion.chunk",
+        created: 1,
         model: "gpt-4.1-mini",
-        body: {
-          messages: [{ role: "user", content: "hello" }],
-        },
-        onFailure(payload) {
-          failurePayload = payload;
-        },
-        onComplete(payload) {
-          completePayload = payload;
-        },
-      }
-    ),
-    /empty response/i
+        choices: [{ index: 0, delta: { role: "assistant" } }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        id: "chatcmpl_empty_1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "gpt-4.1-mini",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3 },
+      })}\n\n`,
+    ],
+    {
+      mode: "translate",
+      targetFormat: FORMATS.OPENAI,
+      sourceFormat: FORMATS.CLAUDE,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      body: {
+        messages: [{ role: "user", content: "hello" }],
+      },
+      onFailure(payload) {
+        failurePayload = payload;
+      },
+      onComplete(payload) {
+        completePayload = payload;
+      },
+    }
   );
+  assert.match(text, /empty response/i);
   assert.ok(failurePayload, "onFailure should be called");
   assert.equal(failurePayload.status, 502);
   assert.match(failurePayload.message, /empty response/i);
@@ -2124,36 +2121,35 @@ test("createSSEStream passthrough drops keepalive event blocks without losing Re
 test("createSSEStream passthrough aborts on Responses usage-limit failures and reports 429", async () => {
   let failurePayload = null;
 
-  await assert.rejects(
-    readTransformed(
-      [
-        `data: ${JSON.stringify({
-          type: "response.failed",
-          response: {
-            id: "resp_usage_limit",
-            object: "response",
-            model: "gpt-5.5",
-            status: "failed",
-            error: {
-              code: "usage_limit_reached",
-              message: "Your weekly usage limit has been reached",
-            },
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
+  const text = await readTransformed(
+    [
+      `data: ${JSON.stringify({
+        type: "response.failed",
+        response: {
+          id: "resp_usage_limit",
+          object: "response",
+          model: "gpt-5.5",
+          status: "failed",
+          error: {
+            code: "usage_limit_reached",
+            message: "Your weekly usage limit has been reached",
           },
-        })}\n\n`,
-      ],
-      {
-        mode: "passthrough",
-        sourceFormat: FORMATS.OPENAI_RESPONSES,
-        provider: "codex",
-        model: "gpt-5.5",
-        body: { input: "hello" },
-        onFailure(payload) {
-          failurePayload = payload;
         },
-      }
-    ),
-    /weekly usage limit|Upstream failure/
+      })}\n\n`,
+    ],
+    {
+      mode: "passthrough",
+      sourceFormat: FORMATS.OPENAI_RESPONSES,
+      provider: "codex",
+      model: "gpt-5.5",
+      body: { input: "hello" },
+      onFailure(payload) {
+        failurePayload = payload;
+      },
+    }
   );
+  assert.match(text, /weekly usage limit|Upstream failure/);
 
   assert.ok(failurePayload, "should report the stream failure before aborting");
   assert.equal(failurePayload.status, 429);
@@ -2221,37 +2217,36 @@ test("createSSEStream passthrough mode decrements pending requests on failure", 
   const testModel = "gpt-test";
   const testConnectionId = "test-conn-123";
 
-  await assert.rejects(
-    readTransformed(
-      [
-        `data: ${JSON.stringify({
-          type: "response.failed",
-          response: {
-            id: "resp_failed_test",
-            object: "response",
-            model: testModel,
-            status: "failed",
-            error: {
-              code: "test_failure",
-              message: "Test failure for pending request tracking",
-            },
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
+  const text = await readTransformed(
+    [
+      `data: ${JSON.stringify({
+        type: "response.failed",
+        response: {
+          id: "resp_failed_test",
+          object: "response",
+          model: testModel,
+          status: "failed",
+          error: {
+            code: "test_failure",
+            message: "Test failure for pending request tracking",
           },
-        })}\n\n`,
-      ],
-      {
-        mode: "passthrough",
-        sourceFormat: FORMATS.OPENAI_RESPONSES,
-        provider: testProvider,
-        model: testModel,
-        connectionId: testConnectionId,
-        body: { input: "hello" },
-        onFailure(payload) {
-          failurePayload = payload;
         },
-      }
-    ),
-    /Test failure|Upstream failure/
+      })}\n\n`,
+    ],
+    {
+      mode: "passthrough",
+      sourceFormat: FORMATS.OPENAI_RESPONSES,
+      provider: testProvider,
+      model: testModel,
+      connectionId: testConnectionId,
+      body: { input: "hello" },
+      onFailure(payload) {
+        failurePayload = payload;
+      },
+    }
   );
+  assert.match(text, /Test failure|Upstream failure/);
 
   assert.ok(failurePayload, "should report the stream failure");
 
