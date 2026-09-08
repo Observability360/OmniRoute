@@ -50,6 +50,86 @@ export async function GET(request: Request) {
   }
 }
 
+type ComboCreateResolution =
+  | { ok: false; response: Response }
+  | {
+      ok: true;
+      comboInput: Record<string, unknown>;
+      name: string;
+      strategy: unknown;
+      config: unknown;
+    };
+
+// Everything from body-schema validation through DAG validation for
+// POST /api/combos — same order as before this was extracted, so which
+// error wins when multiple conditions are true is unchanged.
+async function resolveComboCreate(request, body: unknown): Promise<ComboCreateResolution> {
+  // Zod validation (covers name format, length, etc.)
+  const validation = validateBody(createComboSchema, body);
+  if (isValidationFailure(validation)) {
+    return { ok: false, response: NextResponse.json({ error: validation.error }, { status: 400 }) };
+  }
+  const allCombos = await getCombos();
+  const normalizedModels = normalizeComboModels(validation.data.models, {
+    comboName: validation.data.name,
+    // `allCombos` from `getCombos()` is typed as the DB-shaped record
+    // (JsonRecord & { version: 2; models: ComboStep[] }) which is
+    // structurally compatible with the local ComboCollectionLike in
+    // `normalizeComboModels` but TS does not infer the relationship.
+    allCombos: allCombos as never,
+  });
+  const comboInput = {
+    ...validation.data,
+    models: normalizedModels,
+  };
+  const { name, strategy, config } = comboInput;
+  const compositeValidation = validateCompositeTiersConfig(comboInput);
+  if (compositeValidation.success === false) {
+    const failure = compositeValidation as {
+      success: false;
+      error: { message: string; details: unknown[] };
+    };
+    return {
+      ok: false,
+      response: comboErrorResponse(
+        "COMBO_003",
+        400,
+        { reason: failure.error.message, details: failure.error.details },
+        request
+      ),
+    };
+  }
+
+  // Check if name already exists
+  const existing = await getComboByName(name);
+  if (existing) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Combo name already exists" }, { status: 400 }),
+    };
+  }
+
+  // Validate nested combo DAG (no circular references, max depth)
+  // Temporarily add the new combo to validate its graph
+  const tempCombo = { ...comboInput, name, strategy, config };
+  try {
+    validateComboDAG(
+      name,
+      [...allCombos, tempCombo],
+      new Set(),
+      0,
+      clampComboDepth((config as { maxComboDepth?: unknown } | undefined)?.maxComboDepth)
+    );
+  } catch (dagError) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: dagError.message }, { status: 400 }),
+    };
+  }
+
+  return { ok: true, comboInput, name, strategy, config };
+}
+
 // POST /api/combos - Create new combo
 export async function POST(request) {
   const authError = await requireManagementAuth(request);
@@ -57,65 +137,9 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-
-    // Zod validation (covers name format, length, etc.)
-    const validation = validateBody(createComboSchema, body);
-    if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
-    }
-    const allCombos = await getCombos();
-    const normalizedModels = normalizeComboModels(validation.data.models, {
-      comboName: validation.data.name,
-      // `allCombos` from `getCombos()` is typed as the DB-shaped record
-      // (JsonRecord & { version: 2; models: ComboStep[] }) which is
-      // structurally compatible with the local ComboCollectionLike in
-      // `normalizeComboModels` but TS does not infer the relationship.
-      allCombos: allCombos as never,
-    });
-    const comboInput = {
-      ...validation.data,
-      models: normalizedModels,
-    };
-    const { name, strategy, config } = comboInput;
-    const compositeValidation = validateCompositeTiersConfig(comboInput);
-    if (compositeValidation.success === false) {
-      const failure = compositeValidation as {
-        success: false;
-        error: { message: string; details: unknown[] };
-      };
-      return comboErrorResponse(
-        "COMBO_003",
-        400,
-        { reason: failure.error.message, details: failure.error.details },
-        request
-      );
-    }
-
-    // Check if name already exists
-    const existing = await getComboByName(name);
-    if (existing) {
-      return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
-    }
-
-    // Validate nested combo DAG (no circular references, max depth)
-    // Temporarily add the new combo to validate its graph
-    const tempCombo = {
-      ...comboInput,
-      name,
-      strategy,
-      config,
-    };
-    try {
-      validateComboDAG(
-        name,
-        [...allCombos, tempCombo],
-        new Set(),
-        0,
-        clampComboDepth((config as { maxComboDepth?: unknown } | undefined)?.maxComboDepth)
-      );
-    } catch (dagError) {
-      return NextResponse.json({ error: dagError.message }, { status: 400 });
-    }
+    const resolution = await resolveComboCreate(request, body);
+    if (resolution.ok === false) return resolution.response;
+    const { comboInput, name } = resolution;
 
     // Config-mutation audit trail (#combo-config-audit — see
     // src/lib/compliance/index.ts for the shared audit_log writer; no new

@@ -58,6 +58,27 @@ const INTERNAL_SERVICE_SUBJECT_IDS = new Set([
   "inspector-ingest",
 ]);
 
+// The "management_key" pipeline-header case has its own sub-branches
+// (local CLI token / trusted internal service / access token / a real
+// management-key subject) — split out so the parent switch stays flat.
+function resolveManagementKeyActor(id: string, label: string | null): ManagementAuditActor {
+  if (id === "cli" || label === "local-cli-token") {
+    return { actor: "local-cli-token", authKind: "local-cli-token", authLabel: label };
+  }
+  if (INTERNAL_SERVICE_SUBJECT_IDS.has(id)) {
+    return {
+      actor: `trusted-internal-service:${label || id}`,
+      authKind: "trusted-internal-service",
+      authLabel: label,
+    };
+  }
+  if (label && label.startsWith("access-token:")) {
+    return { actor: `access-token:${id}`, authKind: "access-token", authLabel: label };
+  }
+  // A real management/API-key subject — id is the key's DB id (safe).
+  return { actor: `management-key:${label || id}`, authKind: "management-key", authLabel: label };
+}
+
 function formatFromPipelineHeaders(
   kind: string,
   id: string,
@@ -80,25 +101,7 @@ function formatFromPipelineHeaders(
         authLabel: label,
       };
     case "management_key":
-      if (id === "cli" || label === "local-cli-token") {
-        return { actor: "local-cli-token", authKind: "local-cli-token", authLabel: label };
-      }
-      if (INTERNAL_SERVICE_SUBJECT_IDS.has(id)) {
-        return {
-          actor: `trusted-internal-service:${label || id}`,
-          authKind: "trusted-internal-service",
-          authLabel: label,
-        };
-      }
-      if (label && label.startsWith("access-token:")) {
-        return { actor: `access-token:${id}`, authKind: "access-token", authLabel: label };
-      }
-      // A real management/API-key subject — id is the key's DB id (safe).
-      return {
-        actor: `management-key:${label || id}`,
-        authKind: "management-key",
-        authLabel: label,
-      };
+      return resolveManagementKeyActor(id, label);
     case "client_api_key":
       // Not expected on MANAGEMENT-class routes, but handle defensively
       // rather than falling through silently.
@@ -112,29 +115,29 @@ function formatFromPipelineHeaders(
   }
 }
 
-export async function getManagementAuditActor(request: Request): Promise<ManagementAuditActor> {
-  const pipelineKind = request.headers.get(AUTHZ_HEADER_AUTH_KIND);
-  if (pipelineKind) {
-    const id = request.headers.get(AUTHZ_HEADER_AUTH_ID) || "";
-    const label = request.headers.get(AUTHZ_HEADER_AUTH_LABEL);
-    const formatted = formatFromPipelineHeaders(pipelineKind, id, label);
-    // Resolve a friendlier name for a real (non-internal) management-key
-    // subject when one exists — id alone (a DB id) satisfies "safe", but a
-    // human-readable name is nicer for audit review when the row exists.
-    if (formatted.authKind === "management-key" && id) {
-      try {
-        const row = await getApiKeyById(id);
-        if (row?.name) {
-          return { ...formatted, actor: `management-key:${row.name}` };
-        }
-      } catch {
-        // DB lookup failed — keep the id-based actor already computed above.
-      }
-    }
-    return formatted;
+// Resolve a friendlier name for a real (non-internal) management-key subject
+// when one exists — id alone (a DB id) already satisfies "safe", but a
+// human-readable name is nicer for audit review when the row exists.
+async function refineManagementKeyActorName(
+  formatted: ManagementAuditActor,
+  id: string
+): Promise<ManagementAuditActor> {
+  if (formatted.authKind !== "management-key" || !id) return formatted;
+  try {
+    const row = await getApiKeyById(id);
+    if (row?.name) return { ...formatted, actor: `management-key:${row.name}` };
+  } catch {
+    // DB lookup failed — keep the id-based actor already computed above.
   }
+  return formatted;
+}
 
-  // Fallback — pipeline headers absent (direct caller / test harness).
+// Fallback path — pipeline headers absent (direct caller / test harness).
+// Re-runs requireManagementAuth()'s own checks, in the same order, purely to
+// classify which branch authenticated the caller (no new validation logic).
+async function resolveManagementAuditActorFallback(
+  request: Request
+): Promise<ManagementAuditActor> {
   // Mirror managementPolicy's own Tier 2 bypass (requireLogin=false / no
   // password or OIDC configured): every management caller on this path is
   // genuinely anonymous — a real governance fact, not "unknown".
@@ -192,4 +195,17 @@ export async function getManagementAuditActor(request: Request): Promise<Managem
   // handlers call it before reaching audit code) via a signal this helper
   // doesn't recognise yet — never silently attribute that to "admin".
   return UNKNOWN_ACTOR;
+}
+
+export async function getManagementAuditActor(request: Request): Promise<ManagementAuditActor> {
+  const pipelineKind = request.headers.get(AUTHZ_HEADER_AUTH_KIND);
+  if (pipelineKind) {
+    const id = request.headers.get(AUTHZ_HEADER_AUTH_ID) || "";
+    const label = request.headers.get(AUTHZ_HEADER_AUTH_LABEL);
+    const formatted = formatFromPipelineHeaders(pipelineKind, id, label);
+    return refineManagementKeyActorName(formatted, id);
+  }
+
+  // Fallback — pipeline headers absent (direct caller / test harness).
+  return resolveManagementAuditActorFallback(request);
 }
