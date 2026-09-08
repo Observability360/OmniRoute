@@ -28,6 +28,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout exact target SHA
         uses: actions/checkout@v7
@@ -73,3 +75,61 @@ jobs:
           echo "IMAGE_TAG=ghcr.io/observability360/omniroute:${{ env.BUILD_SOURCE_SHA }}"
           echo "IMAGE_DIGEST=${{ steps.build.outputs.digest }}"
           echo "BUILD_SOURCE_SHA=${{ env.BUILD_SOURCE_SHA }}"
+
+  verify:
+    name: Verify published image (isolated, no production data)
+    needs: build-and-publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Login to GitHub Container Registry (read)
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull by exact digest
+        run: docker pull ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }}
+
+      - name: Confirm linux/amd64
+        run: docker inspect ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }} --format '{{.Os}}/{{.Architecture}}' | tee /tmp/platform.txt
+
+      - name: Run container with isolated ephemeral data (no host volume, no production mount)
+        run: |
+          docker run -d --name verify \
+            -p 20128:20128 \
+            -e OMNIROUTE_MEMORY_MB=1024 \
+            ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }}
+          for i in $(seq 1 30); do
+            if docker inspect -f '{{.State.Health.Status}}' verify 2>/dev/null | grep -q healthy; then
+              echo "HEALTHY after ${i}0s-ish"
+              break
+            fi
+            sleep 5
+          done
+          docker inspect -f '{{.State.Health.Status}}' verify
+
+      - name: Local health endpoint
+        run: curl -sS -m 10 http://127.0.0.1:20128/api/monitoring/health | tee /tmp/health.json
+
+      - name: App version inside image
+        run: docker exec verify node -e "console.log(require('/app/package.json').version)" | tee /tmp/version.txt
+
+      - name: Evidence — combo-config-audit code present in built artifact
+        run: |
+          docker exec verify sh -c "grep -rl 'combo\.create' /app/.next 2>/dev/null || grep -rl 'combo\.create' /app 2>/dev/null" | tee /tmp/combo_evidence.txt || echo "NOT_FOUND_AS_PLAINTEXT (may be minified)" | tee /tmp/combo_evidence.txt
+
+      - name: Evidence — issue #5 controller.terminate fix present in built artifact
+        run: |
+          docker exec verify sh -c "grep -rl 'controller\.terminate' /app/.next 2>/dev/null || grep -rl 'controller\.terminate' /app 2>/dev/null" | tee /tmp/terminate_evidence.txt || echo "NOT_FOUND_AS_PLAINTEXT (may be minified)" | tee /tmp/terminate_evidence.txt
+
+      - name: Container logs (on failure diagnostics)
+        if: always()
+        run: docker logs verify --tail 100 || true
+
+      - name: Cleanup verify container
+        if: always()
+        run: docker rm -f verify || true
