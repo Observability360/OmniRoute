@@ -1011,10 +1011,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     if (decrementPendingRequest && !failureHandled) {
       clearPendingRequestFromStream();
     }
-    // (#5) errOutput was already enqueued above; see the identical fix in
-    // createStreamFailureAborter (streamFailureBoundary.ts) for why this must be
-    // terminate(), not error() -- error() would discard that queued payload.
-    controller.terminate();
+    controller.terminate(); // (#5) errOutput already enqueued above; see streamFailureBoundary.ts
   };
 
   const emitTranslatedClientItem = (
