@@ -4,6 +4,7 @@ import { extractApiKey, isValidApiKey } from "@/sse/services/auth";
 import { getApiKeyMetadata } from "@/lib/db/apiKeys";
 import { isCliTokenAuthValid } from "@/lib/middleware/cliTokenAuth";
 import { evaluateAccessTokenAuth } from "@/server/authz/accessTokenAuth";
+import { verifyCloudflareAccessAssertion } from "@/server/authz/cloudflareAccess";
 import { isTrustedLoopbackInternalServiceRequest } from "@/lib/api/internalServiceAuth";
 import { AUTHZ_HEADER_AUTH_KIND, AUTHZ_HEADER_AUTH_LABEL } from "@/server/authz/headers";
 import {
@@ -60,6 +61,14 @@ export async function requireManagementAuth(
     return null;
   }
 
+  // The authz pipeline strips the raw Cf-Access-Jwt-Assertion header after
+  // verifying it (signature + issuer + audience against Cloudflare's JWKS)
+  // and forwards this trusted subject stamp to route handlers — trust the
+  // pipeline's verdict here rather than re-verifying the JWT a second time.
+  if (request.headers.get(AUTHZ_HEADER_AUTH_KIND) === "workspace_identity") {
+    return null;
+  }
+
   if (await isDashboardSessionAuthenticated(request)) {
     return null;
   }
@@ -75,6 +84,15 @@ export async function requireManagementAuth(
     request.headers.get(AUTHZ_HEADER_AUTH_LABEL) === "local-cli-token"
   ) {
     return null;
+  }
+
+  // Direct/raw callers without the central pipeline (unit tests invoking a
+  // route handler directly) can still be verified here.
+  {
+    const cfAccessVerdict = await verifyCloudflareAccessAssertion(request);
+    if (cfAccessVerdict.kind === "ok") {
+      return null;
+    }
   }
 
   // Direct/raw-Node callers without the central pipeline can still validate the

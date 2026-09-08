@@ -102,6 +102,16 @@ function formatFromPipelineHeaders(
       };
     case "management_key":
       return resolveManagementKeyActor(id, label);
+    case "workspace_identity":
+      // Verified Cloudflare Access human identity (id is the verified,
+      // signature-checked email — see src/server/authz/cloudflareAccess.ts).
+      // Never a client-supplied header value: the pipeline only stamps this
+      // kind after a successful JWKS signature + issuer + audience check.
+      return {
+        actor: `human:${id}`,
+        authKind: "workspace_identity",
+        authLabel: label,
+      };
     case "client_api_key":
       // Not expected on MANAGEMENT-class routes, but handle defensively
       // rather than falling through silently.

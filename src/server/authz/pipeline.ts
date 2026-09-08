@@ -412,7 +412,11 @@ export async function runAuthzPipeline(
 
   if (
     classification.routeClass === "MANAGEMENT" &&
-    outcome.subject.kind === "dashboard_session" &&
+    // workspace_identity (verified Cloudflare Access assertion) is a browser
+    // flow just like dashboard_session — same CSRF/origin exposure, same
+    // protection.
+    (outcome.subject.kind === "dashboard_session" ||
+      outcome.subject.kind === "workspace_identity") &&
     isUnsafeMutationMethod(method)
   ) {
     const originVerdict = validateBrowserMutationOrigin(request);

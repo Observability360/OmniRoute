@@ -11,6 +11,7 @@ import {
   MCP_CONNECT_SCOPE,
 } from "../../../shared/constants/managementScopes";
 import { evaluateAccessTokenAuth } from "../accessTokenAuth";
+import { verifyCloudflareAccessAssertion } from "../cloudflareAccess";
 import { isInternalServiceRequest } from "../../../lib/api/internalServiceAuth";
 import {
   VIDEO_BRIDGE_BROKER_PATH,
@@ -253,6 +254,24 @@ export const managementPolicy: RoutePolicy = {
     // Tier 2: always-protected routes skip the requireLogin=false bypass.
     if (!isAlwaysProtectedPath(path) && !(await isAuthRequired(ctx.request))) {
       return allow({ kind: "anonymous", id: "anonymous", label: "auth-disabled" });
+    }
+
+    // Verified Cloudflare Access human identity — checked before the classic
+    // password/OIDC dashboard session so a real Workspace identity wins over
+    // the generic "dashboard" attribution whenever both are present. Verified
+    // fresh every request (JWT signature + issuer + audience against
+    // Cloudflare's own JWKS — see cloudflareAccess.ts); no new session state.
+    // `not_configured`/`absent`/`invalid` all fall through unchanged to the
+    // existing dashboard-session / API-key / access-token checks below.
+    const cfAccessVerdict = await verifyCloudflareAccessAssertion(
+      ctx.request as unknown as Request
+    );
+    if (cfAccessVerdict.kind === "ok") {
+      return allow({
+        kind: "workspace_identity",
+        id: cfAccessVerdict.email,
+        label: "cloudflare-access",
+      });
     }
 
     if (await isDashboardSessionAuthenticated(ctx.request)) {

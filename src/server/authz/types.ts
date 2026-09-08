@@ -57,11 +57,15 @@ export interface RouteClassification {
  * handlers via assertAuth().
  */
 export interface AuthSubject {
-  kind: "client_api_key" | "dashboard_session" | "management_key" | "anonymous";
+  kind:
+    "client_api_key" | "dashboard_session" | "management_key" | "workspace_identity" | "anonymous";
   /**
    * Stable identifier of the principal:
    *  - hashed key id for API keys
    *  - "dashboard" for the single-tenant dashboard session
+   *  - the verified email for a "workspace_identity" subject (a human
+   *    identity from a trusted external IdP assertion, e.g. Cloudflare
+   *    Access — see src/server/authz/cloudflareAccess.ts)
    *  - "anonymous" for unauthenticated PUBLIC requests
    */
   id: string;
