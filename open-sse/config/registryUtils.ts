@@ -129,6 +129,8 @@ export function buildAuthHeaders(
       return { "x-api-key": token };
     case "x-gladia-key":
       return { "x-gladia-key": token };
+    case "ocp-apim-key":
+      return { "Ocp-Apim-Subscription-Key": token };
     case "bearer":
     default:
       return { Authorization: `Bearer ${token}` };

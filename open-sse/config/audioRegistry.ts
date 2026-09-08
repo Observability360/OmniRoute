@@ -34,6 +34,21 @@ export interface AudioProvider {
 }
 
 export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
+  azure: {
+    id: "azure",
+    // Placeholder — the real per-resource hostname is built at request time
+    // from providerSpecificData.resourceName (custom-subdomain form is what
+    // the Fast Transcription API's own docs use; verified against
+    // https://learn.microsoft.com/azure/ai-services/speech-service/fast-transcription-create,
+    // same pattern as vertex's per-credential region/project URL construction).
+    baseUrl:
+      "https://{resourceName}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe",
+    authType: "apikey",
+    authHeader: "ocp-apim-key",
+    format: "azure-speech",
+    models: [{ id: "fast-transcription", name: "Azure Fast Transcription" }],
+  },
+
   vertex: {
     id: "vertex",
     baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",

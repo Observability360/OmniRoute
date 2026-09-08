@@ -7,6 +7,8 @@ import { Buffer } from "node:buffer";
  * Proxies multipart/form-data to upstream providers.
  *
  * Supported provider formats:
+ * - Azure AI Speech (Fast Transcription API): multipart POST (audio + JSON
+ *   "definition" field), transform { combinedPhrases } to { text }
  * - OpenAI/Groq/Qwen3: standard multipart form-data proxy
  * - Deepgram: raw binary audio POST with model via query param
  * - AssemblyAI: async workflow (upload → submit → poll)
@@ -30,6 +32,7 @@ import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 type TranscriptionCredentials = {
   apiKey?: string;
   accessToken?: string;
+  providerSpecificData?: Record<string, unknown> | null;
 };
 
 /**
@@ -425,6 +428,172 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
 }
 
 /**
+ * O360-specific technical vocabulary hints for Azure's phraseList (Fast
+ * Transcription API, api-version 2025-10-15+ — see
+ * https://learn.microsoft.com/azure/ai-services/speech-service/improve-accuracy-phrase-list).
+ * A single flat list, applied to every Azure request regardless of the
+ * request's own language — deliberately NOT a per-locale/per-caller lookup
+ * table. If this needs to vary per deployment later, that's a config knob,
+ * not a bigger data structure.
+ */
+export const AZURE_PHRASE_HINTS = [
+  "OpenTelemetry",
+  "OTel",
+  "OTLP",
+  "OpenTelemetry Collector",
+  "ClickHouse",
+  "HyperDX",
+  "Prometheus",
+  "Grafana",
+  "Kubernetes",
+  "Fluent Bit",
+  "TraceId",
+  "SpanId",
+  "traceparent",
+  "cardinalidade",
+  "telemetria",
+  "observabilidade",
+  "SRE",
+  "DevOps",
+  "Docker",
+  "Terraform",
+  "GitHub",
+  "Coder",
+  "OmniRoute",
+];
+
+const AZURE_DEFAULT_LOCALE = "pt-BR";
+const AZURE_REQUEST_TIMEOUT_MS = 30_000;
+// 25 MiB comfortably covers a 120s webm/opus voice recording at typical
+// voice bitrates (well under 1 MiB) with generous headroom — matches the
+// cap already enforced upstream by the Coder proxy, kept in sync
+// deliberately rather than trusting only the caller's own limit.
+const AZURE_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+// What real browser MediaRecorder output + the handful of container formats
+// Azure's Fast Transcription API documents support actually look like —
+// not Azure's full supported-format list (WAV, MP3, OPUS/OGG, FLAC, WMA,
+// AAC, ALAW/MULAW-in-WAV, AMR, WebM, SPEEX): this is a dictation-recording
+// upload, not a general media-file ingestion endpoint.
+const AZURE_ALLOWED_MIME_PREFIXES = [
+  "audio/webm",
+  "audio/ogg",
+  "audio/wav",
+  "audio/mp4",
+  "audio/mpeg",
+];
+
+/**
+ * Handle Azure AI Speech transcription (Fast Transcription API).
+ *
+ * Request shape and the "WebM is a supported codec" fact are both verified
+ * directly against Microsoft's own docs (fast-transcription-create), not
+ * assumed — the OLDER "speech to text REST API for short audio" surface
+ * only accepts wav/pcm or ogg/opus, which would have forced client-side
+ * transcoding for Chrome/Edge's native MediaRecorder output
+ * (audio/webm;codecs=opus). Fast Transcription accepts WebM directly.
+ *
+ * Auth + endpoint: Azure Cognitive Services resources are addressed by a
+ * per-resource custom subdomain, not a single global URL — the resource
+ * name must be configured per-credential via providerSpecificData
+ * (identical pattern to vertexMedia.ts's per-credential region/project).
+ *
+ * Response shape is NOT { text } like Whisper — it's
+ * { combinedPhrases: [{ text }, ...] } (one entry per detected channel/
+ * speaker) — normalized here to the single { text } shape every other
+ * provider in this file already returns.
+ */
+async function handleAzureTranscription(
+  providerConfig: AudioProvider,
+  file: Blob & { name?: unknown },
+  _modelId: string | null,
+  token: string | null,
+  formData: FormData,
+  credentials: TranscriptionCredentials | null
+) {
+  const resourceName = credentials?.providerSpecificData?.resourceName;
+  if (typeof resourceName !== "string" || !resourceName.trim()) {
+    return errorResponse(
+      400,
+      'Azure Speech connection is missing providerSpecificData.resourceName (the Speech resource\'s name, e.g. "my-speech-resource")'
+    );
+  }
+
+  const uploadedType = (file.type || "").toLowerCase();
+  if (!AZURE_ALLOWED_MIME_PREFIXES.some((prefix) => uploadedType.startsWith(prefix))) {
+    return errorResponse(
+      400,
+      `Unsupported audio content type "${file.type || "unknown"}" for Azure Speech. Allowed: ${AZURE_ALLOWED_MIME_PREFIXES.join(", ")}`
+    );
+  }
+  if (file.size > AZURE_MAX_AUDIO_BYTES) {
+    return errorResponse(
+      413,
+      `Audio file too large (${file.size} bytes). Maximum is ${AZURE_MAX_AUDIO_BYTES} bytes.`
+    );
+  }
+
+  const languageValue = formData.get("language");
+  const locale =
+    typeof languageValue === "string" && languageValue.trim()
+      ? languageValue.trim()
+      : AZURE_DEFAULT_LOCALE;
+
+  const definition = JSON.stringify({
+    locales: [locale],
+    phraseList: { phrases: AZURE_PHRASE_HINTS },
+  });
+
+  const { body, contentType } = await buildMultipartBody(file, { definition }, "audio");
+
+  const url = `https://${resourceName.trim()}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType },
+      body,
+      signal: AbortSignal.timeout(AZURE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.name === "TimeoutError";
+    return errorResponse(
+      isTimeout ? 504 : 502,
+      isTimeout
+        ? `Azure Speech request timed out after ${AZURE_REQUEST_TIMEOUT_MS}ms`
+        : `Failed to reach Azure Speech: ${err instanceof Error ? err.message : "unknown error"}`
+    );
+  }
+
+  if (!res.ok) {
+    return upstreamErrorResponse(res, await res.text());
+  }
+
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    return errorResponse(502, "Azure Speech returned a response that was not valid JSON");
+  }
+
+  const phrases = (data as { combinedPhrases?: unknown })?.combinedPhrases;
+  if (!Array.isArray(phrases)) {
+    return errorResponse(
+      502,
+      "Azure Speech returned an unexpected response shape (missing combinedPhrases)"
+    );
+  }
+  const text = phrases
+    .map((p) =>
+      p && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""
+    )
+    .join(" ")
+    .trim();
+
+  return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+}
+
+/**
  * Handle Nvidia NIM transcription
  * Multipart POST, transform response to { text }
  */
@@ -773,7 +942,7 @@ export async function handleAudioTranscription({
   if (!providerConfig) {
     return errorResponse(
       400,
-      `No transcription provider found for model "${model}". Available: openai, openrouter, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics`
+      `No transcription provider found for model "${model}". Available: azure, openai, openrouter, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics`
     );
   }
 
@@ -809,6 +978,10 @@ export async function handleAudioTranscription({
         `Vertex transcription failed: ${error?.message || "unknown error"}`
       );
     }
+  }
+
+  if (providerConfig.format === "azure-speech") {
+    return handleAzureTranscription(providerConfig, file, modelId, token, formData, credentials);
   }
 
   if (providerConfig.format === "deepgram") {
