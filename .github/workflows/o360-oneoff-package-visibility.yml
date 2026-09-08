@@ -1,0 +1,31 @@
+name: O360 one-off package visibility fix
+
+# New GHCR packages created via GITHUB_TOKEN default to private, which blocks
+# the production host (no registry credentials of its own) from pulling
+# ghcr.io/observability360/omniroute. Best-effort attempt to flip it public
+# using this job's own token; if it lacks rights for this admin-level action,
+# fail soft and report clearly.
+
+on:
+  push:
+    branches:
+      - build/o360-web-image-3ae5157b
+
+permissions:
+  contents: read
+
+jobs:
+  set-visibility:
+    name: Set omniroute package visibility to public
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X PATCH orgs/Observability360/packages/container/omniroute \
+            -f visibility=public \
+            && echo "VISIBILITY_CHANGE=SUCCESS" \
+            || echo "VISIBILITY_CHANGE=FAILED_INSUFFICIENT_TOKEN_RIGHTS"

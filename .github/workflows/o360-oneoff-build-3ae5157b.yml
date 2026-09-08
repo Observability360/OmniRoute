@@ -7,16 +7,16 @@ name: O360 one-off build (3ae5157b)
 # ONLY to ghcr.io/observability360/omniroute, tagged with the immutable
 # source SHA (no :latest), and never touches Docker Hub.
 #
-# workflow_dispatch requires the workflow file to exist on the repo's
-# default branch to even be dispatchable — this file deliberately never
-# touches main, so it triggers on push to its own throwaway branch instead.
-# That branch is never merged, so this fires exactly once (this push) and
-# never again.
+# Build+verify already succeeded (see run 34224986806) and published
+# ghcr.io/observability360/omniroute:3ae5157b...@sha256:277a7fca...
+# Switched off the push trigger so further pushes to this branch (e.g. the
+# separate package-visibility fix workflow) don't re-run this ~11min build.
+# workflow_dispatch is inert here too (requires the file on the default
+# branch, which this intentionally never touches) — this file is now dead,
+# kept only as a record.
 
 on:
-  push:
-    branches:
-      - build/o360-web-image-3ae5157b
+  workflow_dispatch: {}
 
 permissions:
   contents: read
