@@ -250,7 +250,18 @@ test("Kiro stream errors become Responses response.failed events", async () => {
       })}\n\n`
     )
   );
-  await writer.close();
+  // (#5) The write above triggers emitTranslatedFailureAndAbort, which enqueues the
+  // formatted response.failed event and then terminates the transform -- terminate()
+  // (like the old, buggy error()) errors the writable side as part of handling this
+  // write, so the writable is already closed by the time this runs. Tolerate that
+  // exact condition (same class the codebase already treats as expected client-close
+  // noise elsewhere, see isClientClosedPipelineError's "writablestream is closed"
+  // check) rather than asserting a specific ordering of two independent teardowns.
+  await writer.close().catch((error: unknown) => {
+    if (!(error instanceof TypeError) || !/writablestream is closed/i.test(error.message)) {
+      throw error;
+    }
+  });
   const text = await responseText;
 
   assert.match(text, /event: response\.failed/);
