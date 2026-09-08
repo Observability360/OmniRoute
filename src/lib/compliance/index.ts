@@ -328,7 +328,7 @@ export function initAuditLog() {
  * @param {Object|string} [entry.details] - Additional details
  * @param {string} [entry.ipAddress] - Client IP
  */
-export function logAuditEvent(entry: {
+type AuditLogWriteEntryInternal = {
   action: string;
   actor?: string;
   target?: string;
@@ -339,50 +339,90 @@ export function logAuditEvent(entry: {
   status?: string;
   requestId?: string;
   createdAt?: string;
-}) {
+};
+
+/** Raw INSERT shared by the best-effort and strict audit writers. Never
+ * catches — callers decide whether a failure here is swallowed or fatal. */
+function insertAuditLogRow(db: SqliteAdapter, entry: AuditLogWriteEntryInternal): void {
+  ensureAuditLogSchema(db);
+  const createdAt = entry.createdAt || new Date().toISOString();
+  const serializedDetails = serializeAuditValue(entry.details ?? entry.metadata);
+  const metadataSource =
+    entry.metadata !== undefined
+      ? entry.metadata
+      : entry.details && typeof entry.details === "object"
+        ? entry.details
+        : null;
+  const stmt = db.prepare(`
+    INSERT INTO audit_log (
+      timestamp,
+      action,
+      actor,
+      target,
+      details,
+      ip_address,
+      resource_type,
+      status,
+      request_id,
+      metadata
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    createdAt,
+    entry.action,
+    entry.actor || "system",
+    entry.target || null,
+    serializedDetails,
+    entry.ipAddress || null,
+    entry.resourceType || null,
+    entry.status || null,
+    entry.requestId || null,
+    serializeAuditValue(metadataSource)
+  );
+}
+
+export function logAuditEvent(entry: AuditLogWriteEntryInternal) {
   const db = getDb();
   if (!db) return;
 
   try {
-    ensureAuditLogSchema(db);
-    const createdAt = entry.createdAt || new Date().toISOString();
-    const serializedDetails = serializeAuditValue(entry.details ?? entry.metadata);
-    const metadataSource =
-      entry.metadata !== undefined
-        ? entry.metadata
-        : entry.details && typeof entry.details === "object"
-          ? entry.details
-          : null;
-    const stmt = db.prepare(`
-      INSERT INTO audit_log (
-        timestamp,
-        action,
-        actor,
-        target,
-        details,
-        ip_address,
-        resource_type,
-        status,
-        request_id,
-        metadata
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-      createdAt,
-      entry.action,
-      entry.actor || "system",
-      entry.target || null,
-      serializedDetails,
-      entry.ipAddress || null,
-      entry.resourceType || null,
-      entry.status || null,
-      entry.requestId || null,
-      serializeAuditValue(metadataSource)
-    );
+    insertAuditLogRow(db, entry);
   } catch {
     // Silently fail — audit logging should never break the main flow
   }
+}
+
+/**
+ * Strict, fail-closed audit write (#combo-config-audit strict gate).
+ *
+ * Unlike logAuditEvent() — which is deliberately best-effort so audit
+ * logging never breaks the main flow for the many existing callers that
+ * depend on that — this THROWS on any failure (DB unavailable, schema
+ * error, write failure). Callers that need the guarantee "no mutation
+ * without an attributable audit record" MUST call this BEFORE the mutation
+ * and abort (not perform the mutation) if it throws.
+ *
+ * Writes action=`${entry.action}.attempt`, status="attempted" — a
+ * distinct action name so it is never picked up by a caller querying for
+ * the real `entry.action` success/failure event logged afterward via
+ * logAuditEvent(), and the two rows correlate via the shared requestId
+ * this returns.
+ *
+ * Intentionally not the default for every audit caller — most existing
+ * best-effort call sites are unaffected; only mutation paths that need this
+ * specific guarantee (currently: combo create/update/delete) should use it.
+ */
+export function beginStrictAuditEvent(entry: AuditLogWriteEntryInternal): { requestId: string } {
+  const db = getDbInstance(); // no try/catch — a DB-unavailable error must propagate
+  const requestId = entry.requestId || generateRequestId();
+  insertAuditLogRow(db, {
+    ...entry,
+    action: `${entry.action}.attempt`,
+    status: "attempted",
+    requestId,
+  });
+  return { requestId };
 }
 
 /**
@@ -421,8 +461,7 @@ export function countAuditLog(filter: AuditLogFilter = {}) {
   ensureAuditLogSchema(db);
   const { where, params } = buildAuditLogQuery(filter);
   const row = db.prepare(`SELECT COUNT(*) as count FROM audit_log ${where}`).get(...params) as
-    | { count?: number }
-    | undefined;
+    { count?: number } | undefined;
   return Number(row?.count || 0);
 }
 

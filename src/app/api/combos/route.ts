@@ -13,6 +13,12 @@ import { comboErrorResponse } from "@/lib/api/comboErrorResponse";
 import { computeComboContextLength } from "@/lib/combos/comboContext";
 import { ComboInvariantError } from "@/lib/combos/invariants";
 import { buildComboNameCollisionWarning } from "@/lib/combos/modelNameCollision";
+import {
+  beginStrictAuditEvent,
+  getAuditRequestContext,
+  logAuditEvent,
+} from "@/lib/compliance/index";
+import { getManagementAuditActor } from "@/lib/compliance/managementAuditActor";
 
 // GET /api/combos - Get all combos
 export async function GET(request: Request) {
@@ -44,6 +50,86 @@ export async function GET(request: Request) {
   }
 }
 
+type ComboCreateResolution =
+  | { ok: false; response: Response }
+  | {
+      ok: true;
+      comboInput: Record<string, unknown>;
+      name: string;
+      strategy: unknown;
+      config: unknown;
+    };
+
+// Everything from body-schema validation through DAG validation for
+// POST /api/combos — same order as before this was extracted, so which
+// error wins when multiple conditions are true is unchanged.
+async function resolveComboCreate(request, body: unknown): Promise<ComboCreateResolution> {
+  // Zod validation (covers name format, length, etc.)
+  const validation = validateBody(createComboSchema, body);
+  if (isValidationFailure(validation)) {
+    return { ok: false, response: NextResponse.json({ error: validation.error }, { status: 400 }) };
+  }
+  const allCombos = await getCombos();
+  const normalizedModels = normalizeComboModels(validation.data.models, {
+    comboName: validation.data.name,
+    // `allCombos` from `getCombos()` is typed as the DB-shaped record
+    // (JsonRecord & { version: 2; models: ComboStep[] }) which is
+    // structurally compatible with the local ComboCollectionLike in
+    // `normalizeComboModels` but TS does not infer the relationship.
+    allCombos: allCombos as never,
+  });
+  const comboInput = {
+    ...validation.data,
+    models: normalizedModels,
+  };
+  const { name, strategy, config } = comboInput;
+  const compositeValidation = validateCompositeTiersConfig(comboInput);
+  if (compositeValidation.success === false) {
+    const failure = compositeValidation as {
+      success: false;
+      error: { message: string; details: unknown[] };
+    };
+    return {
+      ok: false,
+      response: comboErrorResponse(
+        "COMBO_003",
+        400,
+        { reason: failure.error.message, details: failure.error.details },
+        request
+      ),
+    };
+  }
+
+  // Check if name already exists
+  const existing = await getComboByName(name);
+  if (existing) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Combo name already exists" }, { status: 400 }),
+    };
+  }
+
+  // Validate nested combo DAG (no circular references, max depth)
+  // Temporarily add the new combo to validate its graph
+  const tempCombo = { ...comboInput, name, strategy, config };
+  try {
+    validateComboDAG(
+      name,
+      [...allCombos, tempCombo],
+      new Set(),
+      0,
+      clampComboDepth((config as { maxComboDepth?: unknown } | undefined)?.maxComboDepth)
+    );
+  } catch (dagError) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: dagError.message }, { status: 400 }),
+    };
+  }
+
+  return { ok: true, comboInput, name, strategy, config };
+}
+
 // POST /api/combos - Create new combo
 export async function POST(request) {
   const authError = await requireManagementAuth(request);
@@ -51,67 +137,84 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
+    const resolution = await resolveComboCreate(request, body);
+    if (resolution.ok === false) return resolution.response;
+    const { comboInput, name } = resolution;
 
-    // Zod validation (covers name format, length, etc.)
-    const validation = validateBody(createComboSchema, body);
-    if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
-    }
-    const allCombos = await getCombos();
-    const normalizedModels = normalizeComboModels(validation.data.models, {
-      comboName: validation.data.name,
-      // `allCombos` from `getCombos()` is typed as the DB-shaped record
-      // (JsonRecord & { version: 2; models: ComboStep[] }) which is
-      // structurally compatible with the local ComboCollectionLike in
-      // `normalizeComboModels` but TS does not infer the relationship.
-      allCombos: allCombos as never,
-    });
-    const comboInput = {
-      ...validation.data,
-      models: normalizedModels,
-    };
-    const { name, strategy, config } = comboInput;
-    const compositeValidation = validateCompositeTiersConfig(comboInput);
-    if (compositeValidation.success === false) {
-      const failure = compositeValidation as {
-        success: false;
-        error: { message: string; details: unknown[] };
-      };
-      return comboErrorResponse(
-        "COMBO_003",
-        400,
-        { reason: failure.error.message, details: failure.error.details },
-        request
-      );
-    }
+    // Config-mutation audit trail (#combo-config-audit — see
+    // src/lib/compliance/index.ts for the shared audit_log writer; no new
+    // table, reuses the same infra provider.credentials.* actions already
+    // use). Real caller identity — see managementAuditActor.ts — sourced
+    // from the same auth signals requireManagementAuth() already used to
+    // authenticate this request, never a hardcoded literal.
+    //
+    // Strict pre-mutation gate (#combo-config-audit follow-up — "no
+    // unattributed combo mutation"): the audit ATTEMPT must be written
+    // BEFORE the mutation, and must abort the request (no combo created) if
+    // that write fails. This is the one guarantee this patch makes
+    // fail-closed; the finalize write below stays best-effort like every
+    // other audit caller.
+    //
+    // `requested: comboInput` (#combo-config-audit follow-up 2): the ATTEMPT
+    // row carries the intended change itself, so evidence of what was about
+    // to happen survives even if the finalize SUCCESS write never lands.
+    // Goes through the same logAuditEvent/beginStrictAuditEvent
+    // serialization + sanitizeAuditValue redaction as every other audit
+    // field — no new sanitizer.
+    const auditContext = getAuditRequestContext(request);
+    const { actor, authKind, authLabel } = await getManagementAuditActor(request);
 
-    // Check if name already exists
-    const existing = await getComboByName(name);
-    if (existing) {
-      return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
-    }
-
-    // Validate nested combo DAG (no circular references, max depth)
-    // Temporarily add the new combo to validate its graph
-    const tempCombo = {
-      ...comboInput,
-      name,
-      strategy,
-      config,
-    };
+    let strictRequestId: string;
     try {
-      validateComboDAG(
-        name,
-        [...allCombos, tempCombo],
-        new Set(),
-        0,
-        clampComboDepth((config as { maxComboDepth?: unknown } | undefined)?.maxComboDepth)
+      ({ requestId: strictRequestId } = beginStrictAuditEvent({
+        action: "combo.create",
+        actor,
+        target: name,
+        resourceType: "combo",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: auditContext.requestId,
+        metadata: { comboName: name, authKind, authLabel, requested: comboInput },
+      }));
+    } catch (auditError) {
+      console.error(
+        "[combo-config-audit] strict audit write failed — refusing to create combo:",
+        auditError
       );
-    } catch (dagError) {
-      return NextResponse.json({ error: dagError.message }, { status: 400 });
+      return comboErrorResponse("INTERNAL_001", 503, { reason: "audit_unavailable" }, request);
     }
 
-    const combo = await createCombo(comboInput);
+    let combo;
+    try {
+      combo = await createCombo(comboInput);
+    } catch (mutationError) {
+      logAuditEvent({
+        action: "combo.create",
+        actor,
+        target: name,
+        resourceType: "combo",
+        status: "failure",
+        ipAddress: auditContext.ipAddress || undefined,
+        requestId: strictRequestId,
+        metadata: {
+          comboName: name,
+          authKind,
+          authLabel,
+          error: mutationError instanceof Error ? mutationError.message : String(mutationError),
+        },
+      });
+      throw mutationError;
+    }
+
+    logAuditEvent({
+      action: "combo.create",
+      actor,
+      target: combo?.id ? String(combo.id) : name,
+      resourceType: "combo",
+      status: "success",
+      ipAddress: auditContext.ipAddress || undefined,
+      requestId: strictRequestId,
+      metadata: { comboName: name, before: null, after: combo, authKind, authLabel },
+    });
 
     // Auto sync to Cloud if enabled
     await syncToCloudIfEnabled();
