@@ -71,6 +71,16 @@ export function createStreamFailureAborter(context: AborterContext) {
     }
     context.clearIdleTimer();
     if (!handled) context.clearPendingRequest();
-    controller.error(context.markPendingRequestCleared(new Error(safeMessage)));
+    // (#5) A formatted terminal SSE payload was already enqueued above (or by the
+    // caller immediately before invoking this aborter) for every caller of this
+    // function. controller.error() resets the readable's internal queue, so it
+    // silently discards that just-enqueued payload before a reader can consume
+    // it -- the reader then rejects with this raw Error instead of resolving
+    // with the sanitized text. controller.terminate() closes the readable
+    // normally (draining the queued payload, then EOF) while still erroring the
+    // writable side, so no further upstream writes can succeed. All bookkeeping
+    // above (onFailure/onComplete/clearPendingRequest) already ran; nothing else
+    // needs the discarded Error object.
+    controller.terminate();
   };
 }

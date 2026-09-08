@@ -45,51 +45,59 @@ test.after(() => {
 
 // --- Golden path: empty content-block stream (the bug case) should now error ---
 
-test("#3685 passthrough: empty Claude SSE (no content_block) rejects the stream", async () => {
+test("#3685 passthrough: empty Claude SSE (no content_block) delivers a formatted error event", async () => {
+  // (#5) The stream used to reject here because emitClaudeEmptyStreamErrorAndAbort
+  // enqueued the formatted `event: error` frame and then immediately called
+  // controller.error(), which discards an enqueued-but-unread chunk -- the reader
+  // rejected with a raw Error instead of ever seeing that frame. It now calls
+  // controller.terminate(), which lets the already-enqueued frame drain to the
+  // reader before the stream ends, so this resolves with the formatted text.
   let failurePayload: Record<string, unknown> | null = null;
-  await assert.rejects(
-    readTransformed(
-      [
-        `event: message_start\ndata: ${JSON.stringify({
-          type: "message_start",
-          message: {
-            id: "msg_3685",
-            type: "message",
-            role: "assistant",
-            model: "claude-sonnet-4-6",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 5, output_tokens: 0 },
-          },
-        })}\n\n`,
-        `event: message_delta\ndata: ${JSON.stringify({
-          type: "message_delta",
-          delta: { stop_reason: "content_filter", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        })}\n\n`,
-        `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
-      ],
-      {
-        mode: "passthrough",
-        sourceFormat: FORMATS.CLAUDE,
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        body: { messages: [{ role: "user", content: "hello" }] },
-        onFailure(p: Record<string, unknown>) {
-          failurePayload = p;
+  const text = await readTransformed(
+    [
+      `event: message_start\ndata: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          id: "msg_3685",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 5, output_tokens: 0 },
         },
-      }
-    ),
-    /empty response/i,
-    "stream should reject with empty-response error"
+      })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({
+        type: "message_delta",
+        delta: { stop_reason: "content_filter", stop_sequence: null },
+        usage: { output_tokens: 1 },
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+    ],
+    {
+      mode: "passthrough",
+      sourceFormat: FORMATS.CLAUDE,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      onFailure(p: Record<string, unknown>) {
+        failurePayload = p;
+      },
+    }
   );
+  assert.match(text, /event: error/, "SSE error event must reach the reader");
+  assert.match(text, /empty response/i, "the delivered event must carry the empty-response error");
   assert.ok(failurePayload, "onFailure callback must be invoked");
   assert.equal((failurePayload as any).status, 502);
   assert.match((failurePayload as any).message as string, /empty response/i);
 });
 
-test("#3685 passthrough: empty Claude SSE emits event: error SSE line before aborting", async () => {
+test("#3685 passthrough: empty Claude SSE emits event: error then ends the stream cleanly", async () => {
+  // (#5) The reader used to throw here (controller.error() after the enqueue).
+  // It now drains the enqueued `event: error` frame and then closes normally
+  // (controller.terminate()) -- the reader must NOT throw, and must still see
+  // the error frame before end-of-stream.
   const collected: string[] = [];
   const source = new ReadableStream<Uint8Array>({
     start(c) {
@@ -123,19 +131,14 @@ test("#3685 passthrough: empty Claude SSE emits event: error SSE line before abo
   );
   const reader = transformed.getReader();
   const dec = new TextDecoder();
-  let gotError = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      collected.push(dec.decode(value));
-    }
-  } catch {
-    gotError = true;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    collected.push(dec.decode(value));
   }
-  assert.ok(gotError, "stream reader should throw on error");
   const full = collected.join("");
-  assert.match(full, /event: error/, "SSE error event must be emitted before abort");
+  assert.match(full, /event: error/, "SSE error event must reach the reader");
+  assert.match(full, /empty response/i, "the delivered event must carry the empty-response error");
   assert.doesNotMatch(
     full,
     /event: content_block_start/,
@@ -211,34 +214,34 @@ test("#3685 pending request counter is decremented when empty-stream error fires
     "pending count should start at 1 after request begins"
   );
 
-  await assert.rejects(
-    readTransformed(
-      [
-        `event: message_start\ndata: ${JSON.stringify({
-          type: "message_start",
-          message: {
-            id: "msg_pending_test",
-            type: "message",
-            role: "assistant",
-            model: "claude-sonnet-4-6",
-            content: [],
-            stop_reason: null,
-            usage: { input_tokens: 3, output_tokens: 0 },
-          },
-        })}\n\n`,
-        `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
-      ],
-      {
-        mode: "passthrough",
-        sourceFormat: FORMATS.CLAUDE,
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        connectionId: "conn-test",
-        body: { messages: [{ role: "user", content: "hello" }] },
-      }
-    ),
-    /empty response/i
+  // (#5) No longer rejects (controller.terminate(), not error()) -- await the
+  // resolved, formatted error text instead of assert.rejects.
+  const text = await readTransformed(
+    [
+      `event: message_start\ndata: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          id: "msg_pending_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-4-6",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 3, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+    ],
+    {
+      mode: "passthrough",
+      sourceFormat: FORMATS.CLAUDE,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      connectionId: "conn-test",
+      body: { messages: [{ role: "user", content: "hello" }] },
+    }
   );
+  assert.match(text, /empty response/i);
 
   // emitClaudeEmptyStreamErrorAndAbort must call trackPendingRequest(..., false) so the
   // counter is back to 0 after the stream terminates.

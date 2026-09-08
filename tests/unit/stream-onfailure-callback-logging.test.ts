@@ -61,19 +61,25 @@ test("#8142 onFailure throwing does not crash the stream and is logged", async (
     debugCalls.push(args);
   };
   try {
-    await assert.rejects(
-      readTransformed([responseFailedChunk("boom upstream")], {
-        mode: "passthrough",
-        sourceFormat: FORMATS.OPENAI,
-        provider: "openai",
-        model: "gpt-test",
-        body: { messages: [{ role: "user", content: "hello" }] },
-        onFailure() {
-          throw new Error("boom from consumer onFailure handler");
-        },
-      }),
+    // (#5) The stream used to reject here (controller.error() discarded the
+    // already-enqueued formatted failure event). It now resolves with that
+    // event via controller.terminate() — the onFailure throw must still not
+    // corrupt control flow or prevent the formatted text from reaching the
+    // reader.
+    const text = await readTransformed([responseFailedChunk("boom upstream")], {
+      mode: "passthrough",
+      sourceFormat: FORMATS.OPENAI,
+      provider: "openai",
+      model: "gpt-test",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      onFailure() {
+        throw new Error("boom from consumer onFailure handler");
+      },
+    });
+    assert.match(
+      text,
       /boom upstream/i,
-      "stream must still reject normally — the callback throw must not corrupt control flow"
+      "the formatted failure event must still reach the reader despite the callback throw"
     );
   } finally {
     console.debug = originalDebug;
@@ -95,20 +101,19 @@ test("#8142 regression: onFailure returning normally logs nothing and behaves id
   };
   let failurePayload: Record<string, unknown> | null = null;
   try {
-    await assert.rejects(
-      readTransformed([responseFailedChunk("boom upstream normal")], {
-        mode: "passthrough",
-        sourceFormat: FORMATS.OPENAI,
-        provider: "openai",
-        model: "gpt-test",
-        body: { messages: [{ role: "user", content: "hello" }] },
-        onFailure(p: Record<string, unknown>) {
-          failurePayload = p;
-          return true;
-        },
-      }),
-      /boom upstream normal/i
-    );
+    // (#5) See the sibling test above — resolves now instead of rejecting.
+    const text = await readTransformed([responseFailedChunk("boom upstream normal")], {
+      mode: "passthrough",
+      sourceFormat: FORMATS.OPENAI,
+      provider: "openai",
+      model: "gpt-test",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      onFailure(p: Record<string, unknown>) {
+        failurePayload = p;
+        return true;
+      },
+    });
+    assert.match(text, /boom upstream normal/i);
   } finally {
     console.debug = originalDebug;
   }
