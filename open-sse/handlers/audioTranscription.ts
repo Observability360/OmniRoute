@@ -502,73 +502,76 @@ const AZURE_ALLOWED_MIME_PREFIXES = [
  * speaker) — normalized here to the single { text } shape every other
  * provider in this file already returns.
  */
-async function handleAzureTranscription(
-  providerConfig: AudioProvider,
+/** Validate the resource-name credential + MIME/size bounds. Split out purely
+ *  to keep handleAzureTranscription's own branching flat; no behavior change. */
+function validateAzureUpload(
   file: Blob & { name?: unknown },
-  _modelId: string | null,
-  token: string | null,
-  formData: FormData,
   credentials: TranscriptionCredentials | null
-) {
+): { resourceName: string } | { errorResponse: Response } {
   const resourceName = credentials?.providerSpecificData?.resourceName;
   if (typeof resourceName !== "string" || !resourceName.trim()) {
-    return errorResponse(
-      400,
-      'Azure Speech connection is missing providerSpecificData.resourceName (the Speech resource\'s name, e.g. "my-speech-resource")'
-    );
+    return {
+      errorResponse: errorResponse(
+        400,
+        'Azure Speech connection is missing providerSpecificData.resourceName (the Speech resource\'s name, e.g. "my-speech-resource")'
+      ),
+    };
   }
 
   const uploadedType = (file.type || "").toLowerCase();
   if (!AZURE_ALLOWED_MIME_PREFIXES.some((prefix) => uploadedType.startsWith(prefix))) {
-    return errorResponse(
-      400,
-      `Unsupported audio content type "${file.type || "unknown"}" for Azure Speech. Allowed: ${AZURE_ALLOWED_MIME_PREFIXES.join(", ")}`
-    );
+    return {
+      errorResponse: errorResponse(
+        400,
+        `Unsupported audio content type "${file.type || "unknown"}" for Azure Speech. Allowed: ${AZURE_ALLOWED_MIME_PREFIXES.join(", ")}`
+      ),
+    };
   }
   if (file.size > AZURE_MAX_AUDIO_BYTES) {
-    return errorResponse(
-      413,
-      `Audio file too large (${file.size} bytes). Maximum is ${AZURE_MAX_AUDIO_BYTES} bytes.`
-    );
+    return {
+      errorResponse: errorResponse(
+        413,
+        `Audio file too large (${file.size} bytes). Maximum is ${AZURE_MAX_AUDIO_BYTES} bytes.`
+      ),
+    };
   }
 
-  const languageValue = formData.get("language");
-  const locale =
-    typeof languageValue === "string" && languageValue.trim()
-      ? languageValue.trim()
-      : AZURE_DEFAULT_LOCALE;
+  return { resourceName: resourceName.trim() };
+}
 
-  const definition = JSON.stringify({
-    locales: [locale],
-    phraseList: { phrases: AZURE_PHRASE_HINTS },
-  });
-
-  const { body, contentType } = await buildMultipartBody(file, { definition }, "audio");
-
-  const url = `https://${resourceName.trim()}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
-
-  let res: Response;
+/** POST to Azure with a bounded timeout, mapping a thrown fetch error (timeout
+ *  or network failure) to an already-built error Response. Split out purely
+ *  to keep handleAzureTranscription's own branching flat; no behavior change. */
+async function fetchAzureTranscription(
+  url: string,
+  headers: Record<string, string>,
+  body: Uint8Array<ArrayBuffer>
+): Promise<{ response: Response } | { errorResponse: Response }> {
   try {
-    res = await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
-      headers: { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType },
+      headers,
       body,
       signal: AbortSignal.timeout(AZURE_REQUEST_TIMEOUT_MS),
     });
+    return { response };
   } catch (err) {
     const isTimeout = err instanceof Error && err.name === "TimeoutError";
-    return errorResponse(
-      isTimeout ? 504 : 502,
-      isTimeout
-        ? `Azure Speech request timed out after ${AZURE_REQUEST_TIMEOUT_MS}ms`
-        : `Failed to reach Azure Speech: ${err instanceof Error ? err.message : "unknown error"}`
-    );
+    return {
+      errorResponse: errorResponse(
+        isTimeout ? 504 : 502,
+        isTimeout
+          ? `Azure Speech request timed out after ${AZURE_REQUEST_TIMEOUT_MS}ms`
+          : `Failed to reach Azure Speech: ${err instanceof Error ? err.message : "unknown error"}`
+      ),
+    };
   }
+}
 
-  if (!res.ok) {
-    return upstreamErrorResponse(res, await res.text());
-  }
-
+/** Parse a successful Azure response and normalize { combinedPhrases } to
+ *  { text }. Split out purely to keep handleAzureTranscription's own
+ *  branching flat; no behavior change. */
+async function parseAzureTranscriptionResponse(res: Response): Promise<Response> {
   let data: unknown;
   try {
     data = await res.json();
@@ -591,6 +594,42 @@ async function handleAzureTranscription(
     .trim();
 
   return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+}
+
+async function handleAzureTranscription(
+  providerConfig: AudioProvider,
+  file: Blob & { name?: unknown },
+  _modelId: string | null,
+  token: string | null,
+  formData: FormData,
+  credentials: TranscriptionCredentials | null
+) {
+  const validated = validateAzureUpload(file, credentials);
+  if ("errorResponse" in validated) return validated.errorResponse;
+  const { resourceName } = validated;
+
+  const languageValue = formData.get("language");
+  const locale =
+    typeof languageValue === "string" && languageValue.trim()
+      ? languageValue.trim()
+      : AZURE_DEFAULT_LOCALE;
+
+  const definition = JSON.stringify({
+    locales: [locale],
+    phraseList: { phrases: AZURE_PHRASE_HINTS },
+  });
+
+  const { body, contentType } = await buildMultipartBody(file, { definition }, "audio");
+  const url = `https://${resourceName}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
+  const headers = { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType };
+
+  const fetched = await fetchAzureTranscription(url, headers, body);
+  if ("errorResponse" in fetched) return fetched.errorResponse;
+
+  if (!fetched.response.ok) {
+    return upstreamErrorResponse(fetched.response, await fetched.response.text());
+  }
+  return parseAzureTranscriptionResponse(fetched.response);
 }
 
 /**
