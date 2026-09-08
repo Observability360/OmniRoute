@@ -1285,9 +1285,7 @@ test("buildStreamSummaryFromEvents falls back to response.output_text.delta when
 test("createSSEStream translate mode aborts on Responses failure with rate limit error", async () => {
   let onCompletePayload = null;
 
-  // (#5) The stream used to reject here (controller.error() discarded the
-  // already-enqueued translated response.failed event). It now resolves with
-  // that event via controller.terminate().
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
   const text = await readTransformed(
     [
       `data: ${JSON.stringify({
@@ -1686,9 +1684,7 @@ test("createSSEStream passthrough merges Claude usage chunks and restores mapped
 test("#3685 createSSEStream passthrough emits SSE error (not synthetic text) for empty Claude assistant SSE", async () => {
   let failurePayload = null;
   let completePayload = null;
-  // (#5) The stream used to reject here (controller.error() discarded the
-  // already-enqueued `event: error` frame). It now resolves with that frame
-  // via controller.terminate().
+  // (#5) terminate() now delivers the already-enqueued event: error frame instead of discarding it via error().
   const text = await readTransformed(
     [
       `event: message_start\ndata: ${JSON.stringify({
@@ -1794,9 +1790,7 @@ test("createSSEStream passthrough does not emit [DONE] for Claude SSE clients", 
 test("#3685 createSSEStream translate mode emits SSE error (not synthetic text) when OpenAI upstream finishes empty for Claude client", async () => {
   let failurePayload = null;
   let completePayload = null;
-  // (#5) The stream used to reject here (controller.error() discarded the
-  // already-enqueued `event: error` frame). It now resolves with that frame
-  // via controller.terminate().
+  // (#5) terminate() now delivers the already-enqueued event: error frame instead of discarding it via error().
   const text = await readTransformed(
     [
       `data: ${JSON.stringify({
@@ -2127,9 +2121,7 @@ test("createSSEStream passthrough drops keepalive event blocks without losing Re
 test("createSSEStream passthrough aborts on Responses usage-limit failures and reports 429", async () => {
   let failurePayload = null;
 
-  // (#5) The stream used to reject here (controller.error() discarded the
-  // already-enqueued response.failed event). It now resolves with that event
-  // via controller.terminate().
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
   const text = await readTransformed(
     [
       `data: ${JSON.stringify({
@@ -2225,9 +2217,7 @@ test("createSSEStream passthrough mode decrements pending requests on failure", 
   const testModel = "gpt-test";
   const testConnectionId = "test-conn-123";
 
-  // (#5) The stream used to reject here (controller.error() discarded the
-  // already-enqueued response.failed event). It now resolves with that event
-  // via controller.terminate().
+  // (#5) terminate() now delivers the already-enqueued response.failed event instead of discarding it via error().
   const text = await readTransformed(
     [
       `data: ${JSON.stringify({
