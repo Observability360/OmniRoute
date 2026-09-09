@@ -194,6 +194,10 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
           cache: npm
       - uses: ./.github/actions/npm-ci-retry
+      # Azure MAI browser-audio regression tests exercise the real runtime
+      # transcoder. GitHub's hosted image no longer guarantees ffmpeg.
+      - name: Install ffmpeg test dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Restore ESLint file cache
         uses: actions/cache@v6
         with:
@@ -503,6 +507,10 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
           cache: npm
       - uses: ./.github/actions/npm-ci-retry
+      # Keep unit coverage aligned with runner-base, where ffmpeg is a runtime
+      # dependency for Azure MAI browser/container normalization.
+      - name: Install ffmpeg test dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       # QW-d: fonte única — o mesmo npm script do CI pesado/local. Fecha dois drifts do
       # comando inline antigo: os dirs `memory` e `usage` estavam FORA do glob (testes
       # silenciosamente não rodavam no fast path) e o setupPolyfill não era importado.
