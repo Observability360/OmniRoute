@@ -33,7 +33,35 @@ export const COMBO_SKIP_REASONS = [
 
 export type ComboSkipReason = (typeof COMBO_SKIP_REASONS)[number];
 
-export type ComboDecision = "dispatched" | "skipped_before_dispatch" | "not_reached";
+/**
+ * The explicit_*, weak_*, and missing_task values are O360 explicit-target-
+ * routing V1 additions: the prelude branch that resolves either a deterministic
+ * "/route <target>" command (routeSlashCommand.ts) or a natural-language
+ * "use <alias>" command (explicitTargetDetector.ts) records one of these
+ * instead of "dispatched"/"skipped_before_dispatch"/"not_reached", which
+ * describe the normal per-target attempt loop and don't fit an
+ * override-or-fail-closed decision made before that loop even starts.
+ *
+ * "weak_unresolved_fallthrough" is natural-language-only: an unresolved
+ * candidate there ALWAYS falls through to ordinary chat instead of failing
+ * closed (natural language is deliberately conservative — only "/route" is
+ * the deterministic, always-fail-closed-on-unknown control API). See each
+ * detector module's own doc comment for the full rationale.
+ *
+ * "missing_task" is "/route"-only: the command was the entire content of
+ * the user's turn, with no task text before or after it to forward to the
+ * resolved target.
+ */
+export type ComboDecision =
+  | "dispatched"
+  | "skipped_before_dispatch"
+  | "not_reached"
+  | "explicit_override"
+  | "unknown_target"
+  | "ambiguous_target"
+  | "target_unavailable"
+  | "weak_unresolved_fallthrough"
+  | "missing_task";
 
 export interface ComboTraceEntry {
   /** Safe internal identifier of the combo step (execution key). */
