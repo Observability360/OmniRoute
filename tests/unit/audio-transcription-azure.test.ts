@@ -12,7 +12,7 @@ function buildFile(contents: string, name: string, type: string) {
 function azureCredentials(overrides: Record<string, unknown> = {}) {
   return {
     apiKey: "sk-azure-test-key",
-    providerSpecificData: { resourceName: "my-speech-resource" },
+    providerSpecificData: { region: "eastus" },
     ...overrides,
   };
 }
@@ -26,7 +26,7 @@ test("handleAudioTranscription (azure): missing credentials fails closed with 40
   assert.equal(response.status, 401);
 });
 
-test("handleAudioTranscription (azure): missing resourceName fails closed with 400, no secret leakage", async () => {
+test("handleAudioTranscription (azure): missing region fails closed with 400, no secret leakage", async () => {
   const formData = new FormData();
   formData.append("model", "azure/fast-transcription");
   formData.append("file", buildFile("abc", "clip.webm", "audio/webm;codecs=opus"));
@@ -109,7 +109,7 @@ test("handleAudioTranscription (azure): successful transcription — request sha
 
     assert.equal(
       captured.url,
-      "https://my-speech-resource.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15"
+      "https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15"
     );
     assert.equal(captured.headers?.["Ocp-Apim-Subscription-Key"], "sk-azure-test-key");
     assert.match(captured.headers?.["Content-Type"] ?? "", /^multipart\/form-data; boundary=/);

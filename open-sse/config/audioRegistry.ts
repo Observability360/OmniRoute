@@ -36,13 +36,17 @@ export interface AudioProvider {
 export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
   azure: {
     id: "azure",
-    // Placeholder — the real per-resource hostname is built at request time
-    // from providerSpecificData.resourceName (custom-subdomain form is what
-    // the Fast Transcription API's own docs use; verified against
-    // https://learn.microsoft.com/azure/ai-services/speech-service/fast-transcription-create,
-    // same pattern as vertex's per-credential region/project URL construction).
-    baseUrl:
-      "https://{resourceName}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe",
+    // Placeholder — the real per-region hostname is built at request time
+    // from providerSpecificData.region. The custom-subdomain form
+    // ({resourceName}.cognitiveservices.azure.com) is what the Fast
+    // Transcription API's own docs lead with, but it requires a custom
+    // subdomain to be enabled on the resource, which is not guaranteed
+    // (confirmed absent on the actual provisioned o360-ai resource via a
+    // live test call — DNS did not resolve). The region-based form
+    // ({region}.api.cognitive.microsoft.com) works with just the API key
+    // and no custom subdomain, and is what's used here; same pattern as
+    // vertex's per-credential region/project URL construction.
+    baseUrl: "https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe",
     authType: "apikey",
     authHeader: "ocp-apim-key",
     format: "azure-speech",
