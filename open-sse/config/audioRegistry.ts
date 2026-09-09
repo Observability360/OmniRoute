@@ -46,6 +46,11 @@ export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
     // ({region}.api.cognitive.microsoft.com) works with just the API key
     // and no custom subdomain, and is what's used here; same pattern as
     // vertex's per-credential region/project URL construction.
+    //
+    // Model: enhancedMode.model="MAI-Transcribe-2", an undocumented but
+    // real, server-validated public-preview feature of this endpoint — see
+    // the doc comment above handleAzureTranscription in audioTranscription.ts
+    // for the full evidence and risk caveats.
     baseUrl: "https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe",
     authType: "apikey",
     authHeader: "ocp-apim-key",
