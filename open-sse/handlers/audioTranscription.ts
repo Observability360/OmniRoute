@@ -492,28 +492,32 @@ const AZURE_ALLOWED_MIME_PREFIXES = [
  * transcoding for Chrome/Edge's native MediaRecorder output
  * (audio/webm;codecs=opus). Fast Transcription accepts WebM directly.
  *
- * Auth + endpoint: Azure Cognitive Services resources are addressed by a
- * per-resource custom subdomain, not a single global URL — the resource
- * name must be configured per-credential via providerSpecificData
- * (identical pattern to vertexMedia.ts's per-credential region/project).
+ * Auth + endpoint: addressed via Azure's region-based endpoint
+ * (https://{region}.api.cognitive.microsoft.com/...), authenticated purely
+ * by the Ocp-Apim-Subscription-Key header — no custom subdomain is required
+ * (custom subdomains are an optional, separate Azure feature this resource
+ * does not have enabled; confirmed via a live test call against the real
+ * provisioned resource). The region must be configured per-credential via
+ * providerSpecificData (identical pattern to vertexMedia.ts's per-credential
+ * region/project).
  *
  * Response shape is NOT { text } like Whisper — it's
  * { combinedPhrases: [{ text }, ...] } (one entry per detected channel/
  * speaker) — normalized here to the single { text } shape every other
  * provider in this file already returns.
  */
-/** Validate the resource-name credential + MIME/size bounds. Split out purely
+/** Validate the region credential + MIME/size bounds. Split out purely
  *  to keep handleAzureTranscription's own branching flat; no behavior change. */
 function validateAzureUpload(
   file: Blob & { name?: unknown },
   credentials: TranscriptionCredentials | null
-): { resourceName: string } | { errorResponse: Response } {
-  const resourceName = credentials?.providerSpecificData?.resourceName;
-  if (typeof resourceName !== "string" || !resourceName.trim()) {
+): { region: string } | { errorResponse: Response } {
+  const region = credentials?.providerSpecificData?.region;
+  if (typeof region !== "string" || !region.trim()) {
     return {
       errorResponse: errorResponse(
         400,
-        'Azure Speech connection is missing providerSpecificData.resourceName (the Speech resource\'s name, e.g. "my-speech-resource")'
+        'Azure Speech connection is missing providerSpecificData.region (the Speech resource\'s region, e.g. "eastus")'
       ),
     };
   }
@@ -536,7 +540,7 @@ function validateAzureUpload(
     };
   }
 
-  return { resourceName: resourceName.trim() };
+  return { region: region.trim() };
 }
 
 /** POST to Azure with a bounded timeout, mapping a thrown fetch error (timeout
@@ -606,7 +610,7 @@ async function handleAzureTranscription(
 ) {
   const validated = validateAzureUpload(file, credentials);
   if ("errorResponse" in validated) return validated.errorResponse;
-  const { resourceName } = validated;
+  const { region } = validated;
 
   const languageValue = formData.get("language");
   const locale =
@@ -620,7 +624,7 @@ async function handleAzureTranscription(
   });
 
   const { body, contentType } = await buildMultipartBody(file, { definition }, "audio");
-  const url = `https://${resourceName}.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
+  const url = `https://${region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
   const headers = { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType };
 
   const fetched = await fetchAzureTranscription(url, headers, body);
