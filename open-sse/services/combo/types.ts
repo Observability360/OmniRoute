@@ -102,6 +102,17 @@ export type HiddenModelsByProvider = ReadonlyMap<string, ReadonlySet<string>>;
 export type HandleComboChatOptions = {
   /** #10681: optional opaque parent invocation id for the decision trace. */
   invocationId?: string;
+  /**
+   * O360 explicit-target-routing V1 recursion guard. Set ONLY by
+   * tryExplicitTargetDispatch.ts on its own recursive handleComboChat() call
+   * when an explicit target resolves to a combo — never read from client JSON
+   * (this lives on the internal options bag, not on `body`, specifically so a
+   * client cannot forge it in a request payload). When true, explicit-target
+   * detection is skipped on that invocation so a resolved combo whose own
+   * messages still contain the original "use <alias>" text cannot re-trigger
+   * a second override and recurse.
+   */
+  explicitTargetResolved?: boolean;
   body: Record<string, unknown>;
   combo: ComboLike;
   handleSingleModel: HandleSingleModel;

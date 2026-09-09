@@ -71,8 +71,12 @@ type RunCombo = (options: HandleComboChatOptions) => Promise<Response>;
 /**
  * The subset of handleComboChat's own arguments that a recursing branch has to
  * hand back to it when it dispatches a nested combo-ref.
+ *
+ * Exported for tryExplicitTargetDispatch.ts (O360 explicit-target routing),
+ * which needs the exact same option-bag rebuild for its combo-alias dispatch
+ * path — reused rather than duplicated.
  */
-type PreludeBaseOptionArgs = {
+export type PreludeBaseOptionArgs = {
   invocationId?: string;
   body: Record<string, unknown>;
   combo: ComboLike;
@@ -99,7 +103,7 @@ type PreludeBaseOptionArgs = {
 };
 
 /** Rebuild handleComboChat's option bag verbatim for a recursive dispatch. */
-function buildBaseOptions(a: PreludeBaseOptionArgs): HandleComboChatOptions {
+export function buildBaseOptions(a: PreludeBaseOptionArgs): HandleComboChatOptions {
   return {
     body: a.body,
     combo: a.combo,
@@ -169,8 +173,14 @@ export function pinIsDurablyUnhealthy(
  * Async wrapper: resolve the pinned model's provider, read its circuit state and
  * active connections, and decide via {@link pinIsDurablyUnhealthy}. Fail-open
  * (return false) on any error so a lookup bug never drops a healthy pin.
+ *
+ * Exported for tryExplicitTargetDispatch.ts (O360 explicit-target routing),
+ * which needs the identical health gate for a resolved explicit target — with
+ * the opposite failure policy at the call site: an explicit target that is
+ * durably unhealthy must fail closed (TARGET_UNAVAILABLE), not silently fall
+ * through to strategy the way a stale context-cache pin does.
  */
-async function isPinnedModelDurablyUnhealthy(pinnedModel: string): Promise<boolean> {
+export async function isPinnedModelDurablyUnhealthy(pinnedModel: string): Promise<boolean> {
   try {
     const provider = parseModel(pinnedModel).provider;
     if (!provider) return false;

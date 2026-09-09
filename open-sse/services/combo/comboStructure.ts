@@ -79,7 +79,11 @@ function toComboLike(combo: ComboInput): ComboLike {
   };
 }
 
-function getCombosArray(allCombos: ComboCollectionLike): ComboLike[] {
+/** Normalize the two ComboCollectionLike shapes (bare array or {combos}) into
+ *  a flat, type-normalized ComboLike[]. Exported for explicitTargetResolver.ts
+ *  (O360 explicit-target routing), which needs the same normalization to scan
+ *  every combo's name/labels — reused rather than reimplemented. */
+export function getCombosArray(allCombos: ComboCollectionLike): ComboLike[] {
   const combos = Array.isArray(allCombos) ? allCombos : allCombos?.combos || [];
   return combos.map((combo) => toComboLike(combo));
 }
