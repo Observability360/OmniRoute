@@ -211,6 +211,19 @@ LABEL org.opencontainers.image.title="omniroute" \
   org.opencontainers.image.source="https://github.com/diegosouzapw/OmniRoute" \
   org.opencontainers.image.licenses="MIT"
 
+# ffmpeg is required at RUNTIME ONLY by open-sse/handlers/audioTranscription.ts
+# (normalizeForAzureMai): Azure's MAI-Transcribe-2 enhancedMode path only
+# accepts WAV/MP3/FLAC, so browser/container uploads (webm/ogg/mp4) are
+# transcoded to WAV server-side before reaching Azure. Installed only in this
+# runner-base stage (not `base`, which the builder stage also derives from) —
+# the build never transcodes audio, only the deployed runtime does.
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/* \
+  && ffmpeg -version
+
 ENV NODE_ENV=production
 ENV PORT=20128
 ENV HOSTNAME=0.0.0.0
