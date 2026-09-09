@@ -121,9 +121,62 @@ test("handleAudioTranscription (azure): successful transcription — request sha
     );
     assert.ok(bodyText.includes('name="definition"'));
     assert.ok(bodyText.includes('"locales":["pt-BR"]'));
+    assert.ok(
+      bodyText.includes('"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2"}'),
+      "definition must request the MAI-Transcribe-2 enhanced mode"
+    );
+    assert.ok(
+      !bodyText.includes("biasingWeight"),
+      "biasingWeight must not be sent — proven a no-op on this REST endpoint"
+    );
     for (const phrase of AZURE_PHRASE_HINTS) {
       assert.ok(bodyText.includes(phrase), `definition must include phrase hint "${phrase}"`);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handleAudioTranscription (azure): normalizes the MAI-Transcribe-2 response shape (no word timestamps, single combined phrase) to { text }", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    // Real shape captured from a live MAI-Transcribe-2 call: no per-word
+    // timestamps, a single combinedPhrases/phrases entry, locale "gl" and
+    // confidence 0 (this backend doesn't populate those the way the
+    // baseline model does) — combinedPhrases is still present, so no
+    // MAI-specific branching is needed in the parser.
+    new Response(
+      JSON.stringify({
+        durationMilliseconds: 11500,
+        combinedPhrases: [
+          {
+            text: "Valide o traceparent, o SpanId e o TraceId antes de correlacionar logs, métricas e traces no HyperDX.",
+          },
+        ],
+        phrases: [
+          {
+            offsetMilliseconds: 0,
+            durationMilliseconds: 11500,
+            text: "Valide o traceparent, o SpanId e o TraceId antes de correlacionar logs, métricas e traces no HyperDX.",
+            locale: "gl",
+            confidence: 0,
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  try {
+    const formData = new FormData();
+    formData.append("model", "azure/fast-transcription");
+    formData.append("file", buildFile("abc", "clip.mp3", "audio/mpeg"));
+
+    const response = await handleAudioTranscription({ formData, credentials: azureCredentials() });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload, {
+      text: "Valide o traceparent, o SpanId e o TraceId antes de correlacionar logs, métricas e traces no HyperDX.",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }
