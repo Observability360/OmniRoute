@@ -28,6 +28,9 @@ import { vertexTranscribe } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
 import { isJsonObject } from "../utils/kieTask.ts";
 import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
+import { isAzureMaiNativeMime, normalizeForAzureMai } from "./azureMaiAudioNormalization.ts";
+
+export { normalizeForAzureMai } from "./azureMaiAudioNormalization.ts";
 
 type TranscriptionCredentials = {
   apiKey?: string;
@@ -473,24 +476,39 @@ const AZURE_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 // Azure's Fast Transcription API documents support actually look like —
 // not Azure's full supported-format list (WAV, MP3, OPUS/OGG, FLAC, WMA,
 // AAC, ALAW/MULAW-in-WAV, AMR, WebM, SPEEX): this is a dictation-recording
-// upload, not a general media-file ingestion endpoint.
+// upload, not a general media-file ingestion endpoint. Anything here that
+// isn't in AZURE_MAI_NATIVE_MIME_PREFIXES is normalized (transcoded) before
+// it reaches Azure — see normalizeForAzureMai().
 const AZURE_ALLOWED_MIME_PREFIXES = [
   "audio/webm",
   "audio/ogg",
   "audio/wav",
   "audio/mp4",
   "audio/mpeg",
+  "audio/flac",
 ];
 
 /**
  * Handle Azure AI Speech transcription (Fast Transcription API).
  *
- * Request shape and the "WebM is a supported codec" fact are both verified
- * directly against Microsoft's own docs (fast-transcription-create), not
- * assumed — the OLDER "speech to text REST API for short audio" surface
- * only accepts wav/pcm or ogg/opus, which would have forced client-side
- * transcoding for Chrome/Edge's native MediaRecorder output
- * (audio/webm;codecs=opus). Fast Transcription accepts WebM directly.
+ * Request shape is verified directly against Microsoft's own docs
+ * (fast-transcription-create), not assumed — the OLDER "speech to text REST
+ * API for short audio" surface only accepts wav/pcm or ogg/opus, which would
+ * have forced client-side transcoding for Chrome/Edge's native MediaRecorder
+ * output (audio/webm;codecs=opus).
+ *
+ * IMPORTANT — WebM support does NOT extend to the enhancedMode/MAI-Transcribe-2
+ * path used here. The generic (baseline) Fast Transcription surface documents
+ * WebM as a supported container, but production testing (2026-09-09) proved
+ * enhancedMode.model="MAI-Transcribe-2" rejects it: a real browser-recorded
+ * audio/webm;codecs=opus upload returned a real Azure 400
+ * ("invalid_audio" / "Format not recognised: Error opening <BytesIO>..."),
+ * while byte-identical spoken content re-encoded as MP3 against the SAME
+ * endpoint/model/credentials returned 200 with an exact transcript.
+ * MAI-Transcribe-2's own documented input formats are WAV, MP3, and FLAC —
+ * see normalizeForAzureMai() below, which transcodes anything else
+ * (webm/ogg/mp4) to WAV before it ever reaches this function's request body.
+ * Do not re-introduce a claim that WebM reaches Azure unchanged.
  *
  * Auth + endpoint: addressed via Azure's region-based endpoint
  * (https://{region}.api.cognitive.microsoft.com/...), authenticated purely
@@ -645,7 +663,29 @@ async function handleAzureTranscription(
     phraseList: { phrases: AZURE_PHRASE_HINTS },
   });
 
-  const { body, contentType } = await buildMultipartBody(file, { definition }, "audio");
+  // MAI-Transcribe-2 only accepts WAV/MP3/FLAC — normalize anything else
+  // (webm/ogg/mp4, i.e. real browser MediaRecorder output) to WAV before
+  // it reaches Azure. Native formats pass through unchanged: same bytes,
+  // same filename/Content-Type, zero added latency.
+  const uploadedType = (file.type || "").toLowerCase();
+  let uploadFile: Blob & { name?: unknown } = file;
+  if (!isAzureMaiNativeMime(uploadedType)) {
+    const inputBytes = new Uint8Array(await file.arrayBuffer());
+    const normalized = await normalizeForAzureMai(inputBytes);
+    if ("error" in normalized) {
+      return errorResponse(422, `Unable to normalize audio for Azure Speech: ${normalized.error}`);
+    }
+    // Copy into an ArrayBuffer-backed view: BlobPart excludes SharedArrayBuffer,
+    // while Node's generic Uint8Array input is typed as ArrayBufferLike.
+    const wavBytes = Uint8Array.from(normalized.bytes);
+    const wavBlob = new Blob([wavBytes.buffer], { type: "audio/wav" }) as Blob & {
+      name?: unknown;
+    };
+    wavBlob.name = "audio.wav";
+    uploadFile = wavBlob;
+  }
+
+  const { body, contentType } = await buildMultipartBody(uploadFile, { definition }, "audio");
   const url = `https://${region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15`;
   const headers = { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType };
 
