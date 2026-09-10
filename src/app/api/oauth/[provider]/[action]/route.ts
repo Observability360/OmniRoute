@@ -40,7 +40,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetupMessage";
 import { keychainImportOnlyGuard } from "./keychainImportOnly";
@@ -109,9 +109,9 @@ function resolvePublicBaseUrl(request: Request): string {
 }
 
 async function requireOAuthRouteAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Use the central management guard so verified Cloudflare Access identities
+  // are honored alongside dashboard sessions and scoped management keys.
+  return requireManagementAuth(request, { invalidApiKeyStatus: 401 });
 }
 
 /**
