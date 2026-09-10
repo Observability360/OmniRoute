@@ -188,7 +188,10 @@ export async function resolveExplicitTarget(args: {
     return { status: "resolved", matchedVia: "label", ...labelMatches[0] };
   }
 
-  if (isModelAvailable) {
+  // Literal model ids always use the canonical provider/model form. Requiring
+  // the separator here keeps bare unknown aliases fail-closed even when the
+  // downstream availability probe is permissive for an unrecognised string.
+  if (alias.includes("/") && isModelAvailable) {
     try {
       const available = await isModelAvailable(alias);
       if (available) {

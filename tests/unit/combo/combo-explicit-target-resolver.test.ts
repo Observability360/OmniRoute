@@ -173,6 +173,22 @@ test("no tier matches → UNKNOWN_TARGET (unknown status), never a silent defaul
   assert.deepEqual(result, { status: "unknown" });
 });
 
+test("bare unknown aliases stay unknown when the availability probe is permissive", async () => {
+  await updateSettings({ explicitTargetAliases: {} });
+  let availabilityChecks = 0;
+  const result = await resolveExplicitTarget({
+    alias: "astra",
+    combo: currentCombo,
+    allCombos: [currentCombo],
+    isModelAvailable: async () => {
+      availabilityChecks += 1;
+      return true;
+    },
+  });
+  assert.deepEqual(result, { status: "unknown" });
+  assert.equal(availabilityChecks, 0);
+});
+
 test("precedence — a synonym match short-circuits before combo-name/label tiers are even consulted", async () => {
   // "o360-cheap-worker" is BOTH a real combo name AND overridden by a synonym
   // pointing somewhere else — the synonym (tier 1) must win.
