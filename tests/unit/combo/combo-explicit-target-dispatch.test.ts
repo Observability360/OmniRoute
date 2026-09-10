@@ -353,7 +353,28 @@ test("/route astra remains UNKNOWN_TARGET until GPT-6 is configured", async () =
       calls.push(modelStr);
       return okResponse("should not happen");
     },
-    isModelAvailable: async () => false,
+    // Mirrors the permissive production probe that previously let a bare
+    // unknown alias escape as a literal model id.
+    isModelAvailable: async () => true,
+    log,
+    settings: null,
+    allCombos: null,
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(calls, []);
+  assert.match(JSON.stringify(await res.json()), /UNKNOWN_TARGET/);
+});
+
+test("/route: bare unknown target fails closed even with a permissive availability probe", async () => {
+  const calls: string[] = [];
+  const res = await handleComboChat({
+    body: { messages: [{ role: "user", content: "/route nonsense\nreview this" }] },
+    combo: { name: "main-combo", strategy: "priority", models: ["provider-a/model-a"] },
+    handleSingleModel: async (_b: Record<string, unknown>, modelStr: string) => {
+      calls.push(modelStr);
+      return okResponse("should not happen");
+    },
+    isModelAvailable: async () => true,
     log,
     settings: null,
     allCombos: null,
