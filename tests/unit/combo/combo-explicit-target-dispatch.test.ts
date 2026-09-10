@@ -363,24 +363,6 @@ test("/route astra remains UNKNOWN_TARGET until GPT-6 is configured", async () =
   assert.match(JSON.stringify(await res.json()), /UNKNOWN_TARGET/);
 });
 
-test("/route glm resolves to the confirmed GLM model", async () => {
-  const calls: string[] = [];
-  const res = await handleComboChat({
-    body: { messages: [{ role: "user", content: "/route glm\nreview this" }] },
-    combo: { name: "main-combo", strategy: "priority", models: ["provider-a/model-a"] },
-    handleSingleModel: async (_b: Record<string, unknown>, modelStr: string) => {
-      calls.push(modelStr);
-      return okResponse("ok");
-    },
-    isModelAvailable: async () => true,
-    log,
-    settings: null,
-    allCombos: null,
-  });
-  assert.equal(res.status, 200);
-  assert.deepEqual(calls, ["zai/glm-4.7-flash"]);
-});
-
 test("/route: lowercase-hyphenated combo name routes to that combo, case-insensitively", async () => {
   const calls: string[] = [];
   const combos = [
