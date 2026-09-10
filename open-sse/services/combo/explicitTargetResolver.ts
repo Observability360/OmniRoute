@@ -50,8 +50,8 @@ export type ExplicitTargetResolution =
  *  a fresh deployment without requiring a settings write or schema change.
  *  An operator-provided synonym with the same key still wins. */
 const DEFAULT_EXPLICIT_TARGET_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  astra: "cx/gpt-5.6-sol-high",
   claude: "cc/claude-sonnet-5",
+  glm: "zai/glm-4.7-flash",
 });
 
 /** "combo/<name>" ⇄ bare model string — the same convention already used for
