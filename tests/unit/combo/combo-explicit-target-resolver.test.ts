@@ -30,10 +30,20 @@ test("tier 1 — built-in Claude alias resolves to the approved real model witho
   });
 });
 
-test("tier 1 — built-in Astra alias is case-insensitive and resolves to the approved model", async () => {
+test("tier 1 — Astra remains unresolved until a real GPT-6 target is configured", async () => {
   await updateSettings({ explicitTargetAliases: {} });
   const result = await resolveExplicitTarget({
     alias: "ASTRA",
+    combo: currentCombo,
+    allCombos: [currentCombo],
+  });
+  assert.deepEqual(result, { status: "unknown" });
+});
+
+test("tier 1 — built-in GLM alias resolves to the confirmed real model", async () => {
+  await updateSettings({ explicitTargetAliases: {} });
+  const result = await resolveExplicitTarget({
+    alias: "GLM",
     combo: currentCombo,
     allCombos: [currentCombo],
   });
@@ -41,7 +51,7 @@ test("tier 1 — built-in Astra alias is case-insensitive and resolves to the ap
     status: "resolved",
     matchedVia: "synonym",
     kind: "model",
-    modelStr: "cx/gpt-5.6-sol-high",
+    modelStr: "zai/glm-4.7-flash",
   });
 });
 

@@ -306,7 +306,7 @@ test("natural language: never reaches tier-4 (literal model id) resolution, even
 // from the forwarded task text.
 // ═══════════════════════════════════════════════════════════════════════════
 
-for (const target of ["claude", "Claude", "CLAUDE", "astra", "ASTRA"]) {
+for (const target of ["claude", "Claude", "CLAUDE"]) {
   test(`/route: "${target}" resolves case-insensitively to its approved real model`, async () => {
     const calls: string[] = [];
     const res = await handleComboChat({
@@ -322,9 +322,7 @@ for (const target of ["claude", "Claude", "CLAUDE", "astra", "ASTRA"]) {
       allCombos: null,
     });
     assert.equal(res.status, 200);
-    assert.deepEqual(calls, [
-      target.toLowerCase() === "claude" ? "cc/claude-sonnet-5" : "cx/gpt-5.6-sol-high",
-    ]);
+    assert.deepEqual(calls, ["cc/claude-sonnet-5"]);
   });
 }
 
@@ -344,6 +342,25 @@ test("/route: literal model id with '/' and '.' routes to the exact model", asyn
   });
   assert.equal(res.status, 200);
   assert.deepEqual(calls, ["cx/gpt-5.6-sol-high"]);
+});
+
+test("/route astra remains UNKNOWN_TARGET until GPT-6 is configured", async () => {
+  const calls: string[] = [];
+  const res = await handleComboChat({
+    body: { messages: [{ role: "user", content: "/route astra\nreview this" }] },
+    combo: { name: "main-combo", strategy: "priority", models: ["provider-a/model-a"] },
+    handleSingleModel: async (_b: Record<string, unknown>, modelStr: string) => {
+      calls.push(modelStr);
+      return okResponse("should not happen");
+    },
+    isModelAvailable: async () => false,
+    log,
+    settings: null,
+    allCombos: null,
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(calls, []);
+  assert.match(JSON.stringify(await res.json()), /UNKNOWN_TARGET/);
 });
 
 test("/route: lowercase-hyphenated combo name routes to that combo, case-insensitively", async () => {
