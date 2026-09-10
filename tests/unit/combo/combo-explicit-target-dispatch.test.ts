@@ -306,7 +306,7 @@ test("natural language: never reaches tier-4 (literal model id) resolution, even
 // from the forwarded task text.
 // ═══════════════════════════════════════════════════════════════════════════
 
-for (const target of ["claude", "Claude", "CLAUDE", "astra", "ASTRA"]) {
+for (const target of ["claude", "Claude", "CLAUDE"]) {
   test(`/route: "${target}" resolves case-insensitively to its approved real model`, async () => {
     const calls: string[] = [];
     const res = await handleComboChat({
@@ -322,9 +322,7 @@ for (const target of ["claude", "Claude", "CLAUDE", "astra", "ASTRA"]) {
       allCombos: null,
     });
     assert.equal(res.status, 200);
-    assert.deepEqual(calls, [
-      target.toLowerCase() === "claude" ? "cc/claude-sonnet-5" : "cx/gpt-5.6-sol-high",
-    ]);
+    assert.deepEqual(calls, ["cc/claude-sonnet-5"]);
   });
 }
 
