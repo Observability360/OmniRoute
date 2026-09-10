@@ -40,7 +40,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetupMessage";
 import { keychainImportOnlyGuard } from "./keychainImportOnly";
@@ -108,12 +108,6 @@ function resolvePublicBaseUrl(request: Request): string {
   return new URL(request.url).origin;
 }
 
-async function requireOAuthRouteAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 /**
  * Dynamic OAuth API Route
  * Handles: authorize, exchange, device-code, poll, start-callback-server, poll-callback
@@ -155,7 +149,7 @@ export async function GET(
     /* fall through to normal handling */
   }
 
-  const authResponse = await requireOAuthRouteAuth(request);
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   try {
@@ -415,7 +409,7 @@ export async function POST(
     /* fall through to normal handling */
   }
 
-  const authResponse = await requireOAuthRouteAuth(request);
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   try {
