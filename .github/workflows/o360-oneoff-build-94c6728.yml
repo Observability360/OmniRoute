@@ -1,0 +1,139 @@
+name: O360 one-off build (94c6728)
+
+# One-off, never-merged build used to produce an immutable O360-owned image
+# for release/v3.8.51 @ 94c67287204ea4fe3280e549d2697f3fa25ce70c (PR #15
+# merge: accept Cloudflare Access identity on Cursor login routes). Same
+# pattern as .github/workflows/o360-oneoff-build-1fe18e5.yml (PR #7's
+# equivalent one-off): publishes ONLY to ghcr.io/observability360/omniroute,
+# tagged with the immutable source SHA (no :latest), package stays PRIVATE,
+# never touches Docker Hub or docker-publish.yml's diegosouzapw/* namespaces.
+#
+# push-trigger scoped to its own throwaway branch — workflow_dispatch
+# requires the file to exist on the default branch, which this deliberately
+# never touches. Fires exactly once (this push).
+
+on:
+  push:
+    branches:
+      - build/o360-web-image-94c6728
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build & publish runner-web image (O360 org only)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout exact target SHA
+        uses: actions/checkout@v7
+        with:
+          ref: 94c67287204ea4fe3280e549d2697f3fa25ce70c
+          persist-credentials: false
+
+      - name: Verify exact source SHA
+        run: |
+          set -euo pipefail
+          ACTUAL=$(git rev-parse HEAD)
+          EXPECTED=94c67287204ea4fe3280e549d2697f3fa25ce70c
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::checked out $ACTUAL, expected $EXPECTED"
+            exit 1
+          fi
+          echo "BUILD_SOURCE_SHA=$ACTUAL" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry (O360 org only)
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push O360-owned web image (immutable SHA tag only)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runner-web
+          platforms: linux/amd64
+          build-args: |
+            OMNIROUTE_USE_TURBOPACK=0
+          push: true
+          tags: ghcr.io/observability360/omniroute:${{ env.BUILD_SOURCE_SHA }}
+
+      - name: Report result
+        run: |
+          echo "IMAGE_TAG=ghcr.io/observability360/omniroute:${{ env.BUILD_SOURCE_SHA }}"
+          echo "IMAGE_DIGEST=${{ steps.build.outputs.digest }}"
+          echo "BUILD_SOURCE_SHA=${{ env.BUILD_SOURCE_SHA }}"
+
+  verify:
+    name: Verify published image (isolated, no production data)
+    needs: build-and-publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Login to GitHub Container Registry (read)
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull by exact digest
+        run: docker pull ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }}
+
+      - name: Confirm linux/amd64
+        run: docker inspect ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }} --format '{{.Os}}/{{.Architecture}}' | tee /tmp/platform.txt
+
+      - name: Run container with isolated ephemeral data (no host volume, no production mount)
+        run: |
+          docker run -d --name verify \
+            -p 20128:20128 \
+            -e OMNIROUTE_MEMORY_MB=1024 \
+            ghcr.io/observability360/omniroute@${{ needs.build-and-publish.outputs.digest }}
+          for i in $(seq 1 30); do
+            if docker inspect -f '{{.State.Health.Status}}' verify 2>/dev/null | grep -q healthy; then
+              echo "HEALTHY after ${i}0s-ish"
+              break
+            fi
+            sleep 5
+          done
+          docker inspect -f '{{.State.Health.Status}}' verify
+
+      - name: Local health endpoint
+        run: curl -sS -m 10 http://127.0.0.1:20128/api/monitoring/health | tee /tmp/health.json
+
+      - name: Evidence — PR #15 shared OAuth auth helper present in built artifact
+        run: |
+          docker exec verify sh -c "find /app/src/app/api/oauth/cursor/login/_shared -name requireOAuthAuth.ts 2>/dev/null" | tee /tmp/pr15_file_evidence.txt || echo "NOT_FOUND" | tee /tmp/pr15_file_evidence.txt
+
+      - name: Evidence — cursor login routes call verifyCloudflareAccessAssertion (source)
+        run: |
+          docker exec verify sh -c "grep -l verifyCloudflareAccessAssertion /app/src/app/api/oauth/cursor/login/_shared/requireOAuthAuth.ts 2>/dev/null" | tee /tmp/pr15_source_evidence.txt || echo "NOT_FOUND" | tee /tmp/pr15_source_evidence.txt
+
+      - name: Evidence — old inline requireOAuthAuth duplicate removed from start/poll/cancel (source)
+        run: |
+          docker exec verify sh -c "grep -l 'isAuthenticated(request)' /app/src/app/api/oauth/cursor/login/start/route.ts /app/src/app/api/oauth/cursor/login/poll/route.ts /app/src/app/api/oauth/cursor/login/cancel/route.ts 2>/dev/null" | tee /tmp/pr15_removed_evidence.txt || echo "NOT_FOUND_AS_EXPECTED" | tee /tmp/pr15_removed_evidence.txt
+
+      - name: Evidence — Cloudflare Access verification code still present (prior fix, regression guard)
+        run: |
+          docker exec verify sh -c "grep -rl 'verifyCloudflareAccessAssertion\|Cf-Access-Jwt-Assertion\|cf-access-jwt-assertion' /app/.build/next/server /app/src 2>/dev/null" | tee /tmp/cf_access_evidence.txt || echo "NOT_FOUND_AS_PLAINTEXT" | tee /tmp/cf_access_evidence.txt
+
+      - name: Container logs (on failure diagnostics)
+        if: always()
+        run: docker logs verify --tail 100 || true
+
+      - name: Cleanup verify container
+        if: always()
+        run: docker rm -f verify || true
