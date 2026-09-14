@@ -1,16 +1,10 @@
 import { NextResponse } from "next/server";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 import {
   createCursorLoginSession,
   generateCursorAuthParams,
 } from "@/lib/oauth/services/cursorLogin";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
-
-async function requireOAuthAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
+import { requireOAuthAuth } from "../_shared/requireOAuthAuth";
 
 /**
  * POST /api/oauth/cursor/login/start
