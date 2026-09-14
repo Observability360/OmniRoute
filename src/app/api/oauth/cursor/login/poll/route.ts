@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
   credentialsFromCursorTokens,
@@ -13,16 +12,11 @@ import { isCloudEnabled } from "@/models";
 import { syncToCloud } from "@/lib/cloudSync";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { requireOAuthAuth } from "../_shared/requireOAuthAuth";
 
 const pollSchema = z.object({
   sessionId: z.string().trim().min(1, "sessionId is required"),
 });
-
-async function requireOAuthAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
 
 async function syncToCloudIfEnabled() {
   try {
