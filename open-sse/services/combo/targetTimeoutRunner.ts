@@ -13,6 +13,7 @@ import { buildErrorBody, errorResponse, sanitizeErrorMessage } from "../../utils
 import {
   COMBO_HEDGE_CANCELLED_REASON,
   COMBO_PER_MODEL_TIMEOUT_REASON,
+  COMBO_UNKNOWN_ABORT_REASON,
 } from "./comboAbortReasons.ts";
 import type { HandleSingleModel, SingleModelTarget, ComboLogger } from "./types.ts";
 
@@ -168,15 +169,30 @@ export function buildTargetTimeoutRunner(deps: {
       ...(target ?? {}),
       modelAbortSignal: timeoutController.signal,
     };
+    // BUG_C fix: propagate the PARENT signal's real abort reason instead of
+    // always relabeling it as a hedge cancellation. The parent signal is the
+    // same AbortController combo.ts aborts for a hedge-loser, a combo-level
+    // safety timeout, AND a plain client/caller disconnect (see
+    // comboAbortReasons.ts for the full rationale) — only propagating the true
+    // reason lets downstream observability tell those apart.
     const parentHedgeSignal = target?.modelAbortSignal ?? null;
     let onParentHedgeAbort: (() => void) | null = null;
+    const propagateParentAbort = () => {
+      const reason =
+        parentHedgeSignal?.reason instanceof Error
+          ? parentHedgeSignal.reason
+          : new Error(
+              typeof parentHedgeSignal?.reason === "string"
+                ? parentHedgeSignal.reason
+                : COMBO_UNKNOWN_ABORT_REASON
+            );
+      timeoutController.abort(reason);
+    };
     if (parentHedgeSignal) {
       if (parentHedgeSignal.aborted) {
-        timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
+        propagateParentAbort();
       } else {
-        onParentHedgeAbort = () => {
-          timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
-        };
+        onParentHedgeAbort = propagateParentAbort;
         parentHedgeSignal.addEventListener("abort", onParentHedgeAbort, { once: true });
       }
     }

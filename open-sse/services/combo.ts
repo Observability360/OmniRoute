@@ -38,6 +38,11 @@ import {
 import { buildNoUpstreamResponseDiagnostics, buildRecoveryHint } from "./combo/pinRecovery.ts";
 import { formatExhaustedConnectionKey } from "./combo/comboDiagFormat.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
+import {
+  COMBO_HEDGE_LOSER_REASON,
+  COMBO_LOOP_SAFETY_REASON,
+  COMBO_CLIENT_DISCONNECT_REASON,
+} from "./combo/comboAbortReasons.ts";
 import { recordComboRequest, recordComboShadowRequest, getComboMetrics } from "./comboMetrics.ts";
 import { qualityScoreFor } from "./routing/index.ts";
 import {
@@ -1287,7 +1292,7 @@ async function handleComboChatInner({
         const markLoopExpiredIfSafetyFired = () => {
           if (loopSafetyFired) {
             comboExpired = true;
-            for (const [, ac] of abortControllers.entries()) ac.abort();
+            for (const [, ac] of abortControllers.entries()) ac.abort(new Error(COMBO_LOOP_SAFETY_REASON));
           }
         };
         const abortControllers = new Map<number, AbortController>();
@@ -2682,7 +2687,7 @@ async function handleComboChatInner({
 
           const abortController = new AbortController();
           abortControllers.set(i, abortController);
-          const onClientAbort = () => abortController.abort();
+          const onClientAbort = () => abortController.abort(new Error(COMBO_CLIENT_DISCONNECT_REASON));
           signal?.addEventListener("abort", onClientAbort);
 
           const task = (async () => {
@@ -2693,7 +2698,7 @@ async function handleComboChatInner({
                   anySuccess = true;
                   globalResolve!(res.response!);
                   for (const [idx, ac] of abortControllers.entries()) {
-                    if (idx !== i) ac.abort();
+                    if (idx !== i) ac.abort(new Error(COMBO_HEDGE_LOSER_REASON));
                   }
                 } else if (res.response) {
                   // Fatal error, abort combo
