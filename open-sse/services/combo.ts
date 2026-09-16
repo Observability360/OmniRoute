@@ -85,7 +85,7 @@ import { checkCredentialGate, logCredentialSkip } from "./credentialGate.ts";
 import { emit } from "../../src/lib/events/eventBus";
 import { notifyWebhookEvent } from "../../src/lib/webhookDispatcher";
 import { type ProviderCandidate } from "./autoCombo/scoring.ts";
-import { estimateTokens } from "./contextManager.ts";
+import { estimateTokens, resolveTokenLimit } from "./contextManager.ts";
 import { getSessionConnection } from "./sessionManager.ts";
 import { getOAuthSessionAvailability } from "./oauthSessionOccupancy.ts";
 import {
@@ -1242,6 +1242,94 @@ async function handleComboChatInner({
           terminalReason,
           recovery: buildRecoveryHint(terminalReason, retryAfterSeconds),
         });
+
+        // #BUG_C follow-up (context-aware routing): skip targets whose KNOWN
+        // context window cannot fit this request, before any network dispatch.
+        // Reuses the SAME primitives (estimateTokens, resolveTokenLimit) already
+        // used elsewhere in this file/chatCore.ts. Uses the SAME accept/reject
+        // margin as the existing final per-target check
+        // (open-sse/handlers/chatCore/outputTokenBudget.ts::enforceOutputTokenBudget,
+        // which only requires availableOutputTokens >= 1 -- there is no larger
+        // fixed reserve for output/system tokens anywhere in this codebase) --
+        // so this pre-filter uses the identical bare comparison
+        // (estimatedTokens < limit) instead of inventing a new margin.
+        // Targets whose limit cannot be resolved with confidence
+        // (resolveTokenLimit(...).specific === false, i.e. only the generic
+        // catch-all matched) are NEVER dropped -- fail-open, since a low-
+        // confidence guess is not grounds to skip a real attempt.
+        //
+        // Scoped to strategy === "priority" only: "auto" already has its own
+        // deliberate, separately-tested fail-open contract for an all-too-small
+        // candidate pool (see tests/unit/8488-capability-filter-fail-closed.test.ts
+        // "auto context estimate still dispatches when all known limits look too
+        // small" -- when its own filtering already reduced the pool to a single
+        // best-effort candidate, "auto" intentionally still dispatches rather than
+        // hard-blocking, since a local token estimate is just a heuristic and a
+        // real provider response is strictly more informative than none at all).
+        // Re-applying a stricter policy on top of that existing, tested contract
+        // would change "auto" behavior as an unintended side effect of a fix
+        // scoped to "priority" -- confirmed with the user rather than overridden
+        // unilaterally.
+        if (strategy === "priority") {
+          const preDispatchEstimatedTokens = estimateTokens(body);
+          const eligibleTargets: typeof orderedTargets = [];
+          const contextIneligible: Array<{ provider: string; model: string; limit: number }> =
+            [];
+          for (const target of orderedTargets) {
+            const parsedForLimit = parseModel(target.modelStr);
+            const limitProvider = parsedForLimit.provider ?? target.provider ?? "unknown";
+            const limitModel = parsedForLimit.model ?? target.modelStr ?? "";
+            const resolvedLimit = resolveTokenLimit(limitProvider, limitModel);
+            if (!resolvedLimit.specific) {
+              // Unknown/generic limit -- never drop with low confidence (T4).
+              eligibleTargets.push(target);
+              continue;
+            }
+            if (preDispatchEstimatedTokens < resolvedLimit.limit) {
+              eligibleTargets.push(target);
+            } else {
+              contextIneligible.push({
+                provider: limitProvider,
+                model: limitModel,
+                limit: resolvedLimit.limit,
+              });
+              log.info(
+                "COMBO",
+                `target skipped reason=context_window_insufficient estimated_tokens=${preDispatchEstimatedTokens} target_limit=${resolvedLimit.limit} target=${target.modelStr}`
+              );
+              recordComboDecision(traceInvocationId, {
+                step: target.executionKey,
+                target: target.modelStr,
+                decision: "skipped_before_dispatch",
+                reason: "context_window_insufficient",
+              });
+            }
+          }
+          if (eligibleTargets.length === 0 && contextIneligible.length > 0) {
+            const perTargetSummary = contextIneligible
+              .map((t) => `${t.provider}/${t.model}=${t.limit}`)
+              .join(", ");
+            return errorResponseWithComboDiagnostics(
+              400,
+              `Request (${preDispatchEstimatedTokens} estimated input tokens) exceeds the context window of every configured target: ${perTargetSummary}.`,
+              {
+                poolSize: orderedTargets.length,
+                attempted: 0,
+                excluded: contextIneligible.map((t) => ({
+                  provider: t.provider,
+                  model: t.model,
+                  reason: `context_window_insufficient:limit=${t.limit}`,
+                })),
+                attemptOrder: [],
+                terminalReason: "context_window_exceeded",
+              },
+              { type: "invalid_request_error", code: "context_window_exceeded" }
+            );
+          }
+          if (eligibleTargets.length > 0) {
+            orderedTargets = eligibleTargets;
+          }
+        }
 
         let globalResolve: ((res: Response) => void) | null = null;
         const globalPromise = new Promise<Response>((res) => {
