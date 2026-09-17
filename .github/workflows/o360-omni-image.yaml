@@ -26,5 +26,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/observability360/omniroute:${{ github.sha }}
+          secrets: |
+            github_token=${{ github.token }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
