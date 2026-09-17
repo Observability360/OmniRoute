@@ -18,7 +18,7 @@ jobs:
         with:
           registry: ghcr.io
           username: vinhali
-          password: ${{ secrets.GHCR_PAT != \x27\x27 && secrets.GHCR_PAT || github.token }}
+          password: ${{ secrets.GHCR_PAT }}
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
