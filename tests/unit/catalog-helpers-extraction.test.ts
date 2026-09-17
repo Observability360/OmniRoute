@@ -14,6 +14,7 @@ import {
   parseJsonStringArray,
   intersectStringArrays,
   minKnownNumber,
+  maxKnownNumber,
   maybeOmitCatalogModelName,
   getThinkingCapabilityFields,
   getConnectionScopedEffortTiers,
@@ -157,6 +158,13 @@ test("catalogHelpers: minKnownNumber ignores non-positive/unknown", () => {
   assert.equal(minKnownNumber([undefined, 0, -5, 7]), 7);
   assert.equal(minKnownNumber([undefined, undefined]), undefined);
   assert.equal(minKnownNumber([]), undefined);
+});
+
+test("catalogHelpers: maxKnownNumber mirrors minKnownNumber but takes the largest known value", () => {
+  assert.equal(maxKnownNumber([3, 1, 2]), 3);
+  assert.equal(maxKnownNumber([200_000, 1_000_000, undefined]), 1_000_000);
+  assert.equal(maxKnownNumber([undefined, 0, -5]), undefined);
+  assert.equal(maxKnownNumber([]), undefined);
 });
 
 test("catalogHelpers: maybeOmitCatalogModelName drops name only when excluding", () => {

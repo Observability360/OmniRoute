@@ -98,6 +98,22 @@ export function minKnownNumber(values: Array<number | undefined>): number | unde
 }
 
 /**
+ * Mirrors minKnownNumber but takes the largest known value instead of the
+ * smallest. Coder-UX-package context-capacity fix: minKnownNumber's
+ * conservative "advertise the worst target's window" semantics are correct
+ * for context_length (an external OpenAI-compatible client contract -- never
+ * promise more than the weakest member can deliver), but a caller deciding
+ * "is this combo capable of handling this request at all" needs the
+ * opposite question answered: is there at least ONE eligible target left,
+ * which needs the ceiling (max), not the floor.
+ */
+export function maxKnownNumber(values: Array<number | undefined>): number | undefined {
+  const knownValues = values.filter(isPositiveFiniteNumber);
+  if (knownValues.length === 0) return undefined;
+  return Math.max(...knownValues);
+}
+
+/**
  * Resolve the adjustable reasoning efforts shared by every connection a combo target can select.
  * `undefined` means there is no connection-scoped evidence, so authoritative static metadata may
  * still apply. An empty array means at least one selectable connection advertised this model but

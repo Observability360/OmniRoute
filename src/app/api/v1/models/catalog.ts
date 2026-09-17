@@ -94,6 +94,7 @@ import {
   parseJsonStringArray,
   intersectStringArrays,
   minKnownNumber,
+  maxKnownNumber,
   maybeOmitCatalogModelName,
   getThinkingCapabilityFields,
   mergeComboCapabilities,
@@ -763,6 +764,21 @@ async function buildUnifiedModelsResponseCore(
       const contextLength =
         explicitContextLength ??
         minKnownNumber(knownMetadata.map((metadata) => metadata.contextLength));
+      // Coder-UX-package context-capacity fix: context_length above is the
+      // conservative "worst target" number for external OpenAI-compatible
+      // clients. max_context_length is the opposite question for internal
+      // capability-aware callers (e.g. Coder's pre-send context-window
+      // estimate): what is the LARGEST window any currently configured
+      // target in this combo can serve, so a request that only overflows
+      // the SMALLEST target (e.g. cursor/auto-balance's 200k) is not
+      // mistakenly reported as exceeding the whole route's capacity when a
+      // larger target remains eligible. When the operator set an explicit
+      // comboContextLength, that is an authoritative override of BOTH
+      // numbers (they deliberately declared the window this combo runs
+      // at), so max_context_length matches context_length in that case too.
+      const maxContextLength =
+        explicitContextLength ??
+        maxKnownNumber(knownMetadata.map((metadata) => metadata.contextLength));
       const maxInputTokens = minKnownNumber(
         knownMetadata.map((metadata) => metadata.maxInputTokens)
       );
@@ -790,6 +806,7 @@ async function buildUnifiedModelsResponseCore(
       return {
         ...baseMetadata,
         ...(contextLength ? { context_length: contextLength } : {}),
+        ...(maxContextLength ? { max_context_length: maxContextLength } : {}),
         ...(maxInputTokens ? { max_input_tokens: maxInputTokens } : {}),
         ...(maxOutputTokens ? { max_output_tokens: maxOutputTokens } : {}),
         ...(inputModalities.length > 0 ? { input_modalities: inputModalities } : {}),
