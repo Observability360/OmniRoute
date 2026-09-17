@@ -453,7 +453,48 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
     return models.filter((m) => providerKeys.has(m.provider));
   }, [selectedProvider, models]);
 
+  // Presentation-only override for the home topology (nothing here touches
+  // the persisted health status or the shared connection-status helpers):
+  // a connection marked providerSpecificData.usageType === "stt" (e.g. an
+  // Azure Speech transcription endpoint riding the azure-openai provider
+  // slot) can never pass the provider's LLM health semantics, so when ALL
+  // of a provider's active connections are STT the topology shows it as a
+  // healthy STT node instead of a dead LLM provider. If a real LLM
+  // connection coexists on the same provider, nothing is overridden and
+  // real errors keep showing. Maps canonical provider id -> optional
+  // display label (providerSpecificData.usageLabel).
+  const sttOnlyProviders = useMemo(() => {
+    const tally = new Map<string, { total: number; stt: number; label?: string }>();
+    for (const conn of providerConnections as Array<{
+      provider?: string | null;
+      isActive?: boolean;
+      providerSpecificData?: Record<string, unknown> | null;
+    }>) {
+      if (conn.isActive === false) continue;
+      const canonical = normalizeProviderId(conn.provider);
+      if (!canonical) continue;
+      const entry = tally.get(canonical) ?? { total: 0, stt: 0 };
+      entry.total += 1;
+      const psd = conn.providerSpecificData;
+      if (psd && psd.usageType === "stt") {
+        entry.stt += 1;
+        if (!entry.label && typeof psd.usageLabel === "string" && psd.usageLabel.trim()) {
+          entry.label = psd.usageLabel.trim();
+        }
+      }
+      tally.set(canonical, entry);
+    }
+    const sttOnly = new Map<string, string | undefined>();
+    for (const [canonical, entry] of tally) {
+      if (entry.total > 0 && entry.stt === entry.total) {
+        sttOnly.set(canonical, entry.label);
+      }
+    }
+    return sttOnly;
+  }, [providerConnections]);
+
   const topologyProviders = useMemo(() => {
+
     type ProviderHealth = "active" | "error" | "idle";
     const byProvider = new Map<
       string,
@@ -494,11 +535,13 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
         providerConfig[canonicalProviderId]?.name ||
         rawProviderId;
 
+      const sttLabel = sttOnlyProviders.get(canonicalProviderId);
+      const isSttOnly = sttOnlyProviders.has(canonicalProviderId);
       byProvider.set(canonicalProviderId, {
         id: canonicalProviderId,
         provider: canonicalProviderId,
-        name: resolvedName,
-        status: healthByProvider.get(canonicalProviderId) ?? "idle",
+        name: isSttOnly ? `${sttLabel || resolvedName} \u00b7 STT` : resolvedName,
+        status: isSttOnly ? "active" : (healthByProvider.get(canonicalProviderId) ?? "idle"),
       });
     };
 
@@ -509,7 +552,7 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
     Object.keys(providerMetrics).forEach((provider) => addProvider(provider));
 
     return Array.from(byProvider.values());
-  }, [providerStats, providerMetrics, providerNodes, providerConnections]);
+  }, [providerStats, providerMetrics, providerNodes, providerConnections, sttOnlyProviders]);
 
   const { lastProvider, errorProvider } = providerTopology;
 
@@ -1131,7 +1174,9 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
           <HomeProviderTopologySection
             providers={topologyProviders}
             lastProvider={lastProvider}
-            errorProvider={errorProvider}
+            errorProvider={
+              sttOnlyProviders.has(normalizeProviderId(errorProvider)) ? "" : errorProvider
+            }
             enabled={showProviderTopologyOnHome}
           />
           <HomeRecentRequests enabled={showProviderTopologyOnHome} />
