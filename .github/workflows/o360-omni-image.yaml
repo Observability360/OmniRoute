@@ -30,3 +30,15 @@ jobs:
             github_token=${{ github.token }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Production hosts currently lack a valid GHCR pull token (the
+      # Infisical GHCR_PULL_TOKEN expired), so also export the image as
+      # a workflow artifact for docker-load deploys.
+      - name: Export image artifact
+        run: |
+          docker pull ghcr.io/observability360/omniroute:${{ github.sha }}
+          docker save ghcr.io/observability360/omniroute:${{ github.sha }} | zstd -T0 -3 -o omniroute-image.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-image
+          path: omniroute-image.tar.zst
+          retention-days: 3
