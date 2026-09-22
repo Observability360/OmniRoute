@@ -35,6 +35,10 @@ runs:
     # change, so every job using this shared action pays a cheap `command -v`
     # check instead. A human with that scope should move this into test-unit's
     # own steps in ci.yml and drop it from here.
+    # Linux-only: apt-get doesn't exist on windows-latest/macos-latest runners
+    # that also use this action (e.g. Bun SQLite Compatibility) — confirmed
+    # broken there (exit 127) before this guard was added.
     - name: Ensure ffmpeg is present (Azure MAI audio normalization tests)
+      if: runner.os == 'Linux'
       shell: bash
       run: command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
