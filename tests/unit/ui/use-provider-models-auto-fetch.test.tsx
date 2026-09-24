@@ -108,13 +108,22 @@ describe("useProviderModels upstream auto-fetch", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const mounted = await renderProviderModels();
-    await flushQueuedSync();
 
-    // Mesmo motivo do teste acima: desmontar fecha a janela do timer vazado.
-    mounted.unmount();
-
-    expect(fetchMock).toHaveBeenCalledWith("/api/providers/connection-1/sync-models?mode=sync", {
-      method: "POST",
-    });
+    // Esperar pela chamada em vez de um sleep fixo: sob os workers da suite cheia o
+    // setTimeout da auto-sync pode disparar depois de 10ms, e o assert via antes da
+    // hora so as chamadas de /api/v1/providers (vermelho intermitente no CI).
+    try {
+      await vi.waitFor(
+        () =>
+          expect(fetchMock).toHaveBeenCalledWith(
+            "/api/providers/connection-1/sync-models?mode=sync",
+            { method: "POST" }
+          ),
+        { timeout: 5000, interval: 20 }
+      );
+    } finally {
+      // Mesmo motivo do teste acima: desmontar fecha a janela do timer vazado.
+      mounted.unmount();
+    }
   });
 });
