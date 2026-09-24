@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
   assembleStandalone,
@@ -91,11 +91,54 @@ export function ensureWindowsBuildProfileDirs(env, mkdirImpl = mkdirSync) {
   mkdirImpl(env.LOCALAPPDATA, { recursive: true });
 }
 
+/**
+ * GitHub-hosted runners (16 GB) are shut down during "Collecting page data" even
+ * with a single page-data worker; the Build App workflow (build.yml) survives the
+ * same build only because it adds swap first. Workflow files cannot always be
+ * changed from every pusher, so the build adds that swap itself — ONLY on an
+ * ephemeral github-hosted runner (passwordless sudo, disposable VM), never on a
+ * developer machine or self-hosted runner. OMNIROUTE_BUILD_SWAP_MB=0 disables it.
+ * The script is a constant (size is validated as an integer) — no interpolation of
+ * untrusted input into the shell.
+ */
+export function resolveHostedRunnerSwapMb(env = process.env) {
+  if (env.GITHUB_ACTIONS !== "true" || env.RUNNER_ENVIRONMENT !== "github-hosted") return 0;
+  if (process.platform !== "linux") return 0;
+  const raw = env.OMNIROUTE_BUILD_SWAP_MB;
+  if (raw === undefined || raw === "") return 10240;
+  const mb = Number.parseInt(raw, 10);
+  return Number.isInteger(mb) && mb > 0 ? mb : 0;
+}
+
+export function ensureHostedRunnerSwap(env = process.env, run = spawnSync) {
+  const mb = resolveHostedRunnerSwapMb(env);
+  if (mb <= 0) return false;
+  const script = [
+    "set -e",
+    "swapoff -a || true",
+    "rm -f /mnt/omniroute-build.swap",
+    'fallocate -l "${SWAP_MB}M" /mnt/omniroute-build.swap || dd if=/dev/zero of=/mnt/omniroute-build.swap bs=1M count="$SWAP_MB"',
+    "chmod 600 /mnt/omniroute-build.swap",
+    "mkswap /mnt/omniroute-build.swap >/dev/null",
+    "swapon /mnt/omniroute-build.swap",
+    "free -h",
+  ].join("\n");
+  const result = run("sudo", ["-n", "env", `SWAP_MB=${mb}`, "sh", "-c", script], {
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    console.warn(`[build] could not add ${mb} MB swap on the hosted runner (continuing)`);
+    return false;
+  }
+  return true;
+}
+
 function runNextBuild() {
   return new Promise((resolve) => {
     const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
     const buildEnv = resolveNextBuildEnv(process.env);
     ensureWindowsBuildProfileDirs(buildEnv);
+    ensureHostedRunnerSwap(process.env);
     const nextArgs = process.versions.bun
       ? [
           "--preload",
