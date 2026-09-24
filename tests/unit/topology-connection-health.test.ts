@@ -23,8 +23,8 @@ test("HomePageClient derives per-provider health from connection testStatus coun
   );
   assert.match(
     homePageClientSrc,
-    /status:\s*healthByProvider\.get\(canonicalProviderId\)\s*\?\?\s*"idle"/,
-    "each topology entry must carry the resolved health status"
+    /status:\s*isSttOnly\s*\?\s*"active"\s*:\s*\(healthByProvider\.get\(canonicalProviderId\)\s*\?\?\s*"idle"\)/,
+    "each topology entry must carry the resolved health status (STT-only providers render healthy, f2bf6f248)"
   );
 });
 

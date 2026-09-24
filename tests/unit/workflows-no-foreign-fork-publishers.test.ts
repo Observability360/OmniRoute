@@ -37,6 +37,16 @@ const workflowDir = path.join(repoRoot, ".github/workflows");
 /** The only owner whose namespaces this repository may publish to or gate on. */
 const OWNER = "diegosouzapw";
 
+/**
+ * Fork-local exception: this checkout is the Observability360 fork, whose own
+ * `o360-omni-image.yaml` publishes the O360 production image to its own
+ * `ghcr.io/observability360` namespace with its own GITHUB_TOKEN. Keep this list to
+ * owners that actually host this repository — never a contributor's personal fork.
+ */
+const FORK_OWNERS = new Set(["observability360"]);
+const isAllowedOwner = (owner: string) =>
+  owner.toLowerCase() === OWNER || FORK_OWNERS.has(owner.toLowerCase());
+
 function workflowFiles(): string[] {
   return fs
     .readdirSync(workflowDir)
@@ -53,7 +63,7 @@ test("no workflow publishes to another owner's container registry", () => {
     // right after the registry host.
     for (const m of text.matchAll(/\b(?:ghcr\.io|(?:index\.)?docker\.io)\/([A-Za-z0-9_.-]+)/g)) {
       const owner = m[1];
-      if (owner.toLowerCase() !== OWNER) {
+      if (!isAllowedOwner(owner)) {
         offenders.push(`${path.basename(file)} → ${m[0]}`);
       }
     }
@@ -77,7 +87,7 @@ test("no workflow job is gated on a different repository", () => {
     // the workflow was written for a fork.
     for (const m of text.matchAll(/github\.repository\s*[=!]=\s*['"]([^'"]+)['"]/g)) {
       const [owner] = m[1].split("/");
-      if (owner.toLowerCase() !== OWNER) {
+      if (!isAllowedOwner(owner)) {
         offenders.push(`${path.basename(file)} → ${m[0]}`);
       }
     }

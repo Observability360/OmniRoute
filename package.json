@@ -303,7 +303,7 @@
     "material-symbols": "^0.46.0",
     "mermaid": "^11.15.0",
     "monaco-editor": "^0.56.0",
-    "next": "16.3.1",
+    "next": "16.3.6",
     "next-intl": "^4.13.7",
     "next-themes": "^0.4.6",
     "node-machine-id": "^1.1.12",
@@ -323,7 +323,7 @@
     "recharts": "^3.8.1",
     "safe-regex": "^2.1.1",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.4",
     "smol-toml": "1.8.0",
     "socks": "^2.8.7",
     "sql.js": "^1.14.2",
@@ -378,7 +378,7 @@
     "ctrf": "^0.3.0",
     "dpdm": "^4.3.0",
     "eslint": "^9.39.4",
-    "eslint-config-next": "16.3.1",
+    "eslint-config-next": "16.3.6",
     "eslint-plugin-sonarjs": "^4.1.0",
     "fast-check": "^4.8.0",
     "fumadocs-mdx": "^15.2.3",
@@ -437,18 +437,18 @@
   "overrides": {
     "onnxruntime-node": "1.24.3",
     "fast-xml-parser": "^5.10.1",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.4",
     "postcss": "^8.5.18",
     "ip-address": "^10.3.1",
-    "qs": "^6.15.2",
+    "qs": "^6.16.0",
     "uuid": "^14.0.0",
     "form-data": "^4.0.6",
     "vite": "^8.0.16",
     "protobufjs": "^7.6.5",
     "@babel/core": "^7.29.6",
-    "hono": "^4.12.34",
+    "hono": "^4.13.9",
     "@hono/node-server": "^2.0.5",
-    "fast-uri": "^3.1.5",
+    "fast-uri": "^3.1.8",
     "body-parser": "^2.3.0",
     "@yarnpkg/parsers": {
       "js-yaml": "^4.3.1"
@@ -462,7 +462,8 @@
     "concurrently": {
       "shell-quote": "^1.9.0"
     },
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
+    "baseline-browser-mapping": "^2.11.25",
     "promptfoo": {
       "js-yaml": "^5.2.2",
       "undici": "^7.29.0"

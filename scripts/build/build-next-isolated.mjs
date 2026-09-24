@@ -193,6 +193,20 @@ export function resolveNextBuildEnv(baseEnv = process.env, platform = process.pl
     env.LOCALAPPDATA = path.join(buildHomeDir, "AppData", "Local");
   }
 
+  // GitHub-hosted runners (16 GB / 4 vCPU): Next 16 collects page data with
+  // os.cpus()-1 = 3 workers at ~4.5 GB RSS each (#7518), which exhausts the host
+  // right after "Collecting page data" and the runner is shut down with no build
+  // error. Apply the same 1-worker cap the Dockerfile uses (CIRCLE_NODE_TOTAL=2,
+  // #10060/#7518) to the direct CI `npm run build` path. Self-hosted runners and
+  // local builds keep Next's default; an explicit CIRCLE_NODE_TOTAL always wins.
+  if (
+    baseEnv.GITHUB_ACTIONS === "true" &&
+    baseEnv.RUNNER_ENVIRONMENT === "github-hosted" &&
+    !baseEnv.CIRCLE_NODE_TOTAL
+  ) {
+    env.CIRCLE_NODE_TOTAL = "2";
+  }
+
   // Raise the Node heap for the spawned `next build`. The webpack production pass
   // ("Compiling instrumentation" bundles the whole server graph) is the heaviest
   // phase and overflows V8's default ~2 GB ceiling on memory-constrained machines,
@@ -210,7 +224,11 @@ export function resolveNextBuildEnv(baseEnv = process.env, platform = process.pl
     // headroom without risk. NOTE: heap size does NOT fix a poisoned scope — if the build
     // OOMs/livelocks far above this, check for worktrees/cruft leaking into the tsconfig
     // scope (run `npm run check:build-scope`), not for "more heap". See incident 2026-06-25.
-    const heapMb = Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB) || 8192;
+    // GitHub-hosted runners get the Dockerfile's 6144 MB (#10060): with 8 GB the parent
+    // plus the page-data worker still outgrow the 16 GB host even at 1 worker.
+    const hostedRunner =
+      baseEnv.GITHUB_ACTIONS === "true" && baseEnv.RUNNER_ENVIRONMENT === "github-hosted";
+    const heapMb = Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB) || (hostedRunner ? 6144 : 8192);
     env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --max-old-space-size=${heapMb}`.trim();
   }
 
