@@ -25,4 +25,13 @@ describe("page-data worker cap on GitHub-hosted runners", () => {
     assert.equal(resolveNextBuildEnv(selfHosted, "linux").CIRCLE_NODE_TOTAL, undefined);
     assert.equal(resolveNextBuildEnv({}, "linux").CIRCLE_NODE_TOTAL, undefined);
   });
+
+  it("uses the Dockerfile's 6144 MB heap on a hosted runner, 8192 MB elsewhere", () => {
+    assert.match(resolveNextBuildEnv(hosted, "linux").NODE_OPTIONS, /--max-old-space-size=6144/);
+    assert.match(resolveNextBuildEnv({}, "linux").NODE_OPTIONS, /--max-old-space-size=8192/);
+    assert.match(
+      resolveNextBuildEnv({ ...hosted, OMNIROUTE_BUILD_MEMORY_MB: "10240" }, "linux").NODE_OPTIONS,
+      /--max-old-space-size=10240/
+    );
+  });
 });

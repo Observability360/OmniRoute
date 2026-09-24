@@ -224,7 +224,11 @@ export function resolveNextBuildEnv(baseEnv = process.env, platform = process.pl
     // headroom without risk. NOTE: heap size does NOT fix a poisoned scope — if the build
     // OOMs/livelocks far above this, check for worktrees/cruft leaking into the tsconfig
     // scope (run `npm run check:build-scope`), not for "more heap". See incident 2026-06-25.
-    const heapMb = Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB) || 8192;
+    // GitHub-hosted runners get the Dockerfile's 6144 MB (#10060): with 8 GB the parent
+    // plus the page-data worker still outgrow the 16 GB host even at 1 worker.
+    const hostedRunner =
+      baseEnv.GITHUB_ACTIONS === "true" && baseEnv.RUNNER_ENVIRONMENT === "github-hosted";
+    const heapMb = Number(baseEnv.OMNIROUTE_BUILD_MEMORY_MB) || (hostedRunner ? 6144 : 8192);
     env.NODE_OPTIONS = `${env.NODE_OPTIONS || ""} --max-old-space-size=${heapMb}`.trim();
   }
 
