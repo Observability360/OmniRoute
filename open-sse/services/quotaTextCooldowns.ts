@@ -36,11 +36,14 @@ export function isSubscriptionQuotaText(lower: string, provider?: string | null)
     lower.includes("claude pro usage limit") ||
     lower.includes("you've reached your usage limit") ||
     lower.includes("you have reached your usage limit") ||
+    // Windowed variants: Kimi Coding answers an exhausted rolling window with
+    // 403 "You've reached your 5-hour usage limit" — without this the unmatched
+    // 403 became FORBIDDEN → terminal "banned" and never renewed.
+    /you(?:'ve| have) reached your (?:[\w-]+ ){1,2}usage limit/.test(lower) ||
     // Native Claude OAuth uses this otherwise-generic 429 wording for an
     // exhausted subscription window. Keep it provider-scoped: other upstreams
     // can use the same phrase for a short RPM throttle.
-    (provider === "claude" &&
-      lower.includes("this request would exceed your account's rate limit"))
+    (provider === "claude" && lower.includes("this request would exceed your account's rate limit"))
   );
 }
 
@@ -120,7 +123,8 @@ export function buildWeeklyQuotaFallback(errorStr: string): QuotaTextFallback | 
     cooldownMs,
     reason: RateLimitReason.QUOTA_EXHAUSTED,
     usedUpstreamRetryHint: typeof parsedResetMs === "number" && parsedResetMs > 0,
-    quotaResetHintMs: typeof parsedResetMs === "number" && parsedResetMs > 0 ? parsedResetMs : undefined,
+    quotaResetHintMs:
+      typeof parsedResetMs === "number" && parsedResetMs > 0 ? parsedResetMs : undefined,
   };
 }
 
