@@ -22,8 +22,8 @@ const KIMI_5H_BODY = {
 test("windowed usage-limit phrasing is recognized as subscription quota", () => {
   for (const text of [
     "you've reached your 5-hour usage limit.",
-    "you have reached your weekly usage limit",
-    "you've reached your daily usage limit",
+    "you have reached your 5 hour usage limit",
+    "you've reached your 5h usage limit",
     "you've reached your usage limit",
   ]) {
     assert.equal(isSubscriptionQuotaText(text), true, text);
@@ -33,6 +33,9 @@ test("windowed usage-limit phrasing is recognized as subscription quota", () => 
 test("unrelated 403 wording is not treated as a usage window", () => {
   assert.equal(isSubscriptionQuotaText("you have reached the end of the document"), false);
   assert.equal(isSubscriptionQuotaText("access denied: usage policy violation"), false);
+  // weekly/session caps keep their own (longer) dedicated cooldown builders
+  assert.equal(isSubscriptionQuotaText("you have reached your weekly usage limit"), false);
+  assert.equal(isSubscriptionQuotaText("you have reached your session usage limit"), false);
 });
 
 test("Kimi 403 5-hour usage limit classifies as QUOTA_EXHAUSTED, not FORBIDDEN", () => {
