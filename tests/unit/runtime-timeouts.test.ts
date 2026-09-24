@@ -12,6 +12,7 @@ test("upstream timeout config derives hidden fetch timeouts from FETCH_TIMEOUT_M
   assert.deepEqual(config, {
     fetchTimeoutMs: 600000,
     streamIdleTimeoutMs: 600000,
+    streamProgressTimeoutMs: 300000,
     sseHeartbeatIntervalMs: 15000,
     streamReadinessTimeoutMs: 80000,
     streamReadinessMaxTimeoutMs: 180000,

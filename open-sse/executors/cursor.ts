@@ -236,6 +236,31 @@ const CURSOR_STREAM_TIMEOUT_MS = (() => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 300000;
 })();
 
+// Progress watchdog: abort when the stream stops producing model output (text,
+// thinking, tool calls or token counts) for this long, instead of holding the
+// response open until the wall-clock cap above. Once the stream has been handed
+// to the client the combo can no longer fall back, so a cursor-agent that goes
+// silent mid-turn would otherwise stall the caller for the full 300s. `0`
+// disables the watchdog; a malformed value falls back to the default.
+export const CURSOR_STREAM_IDLE_TIMEOUT_MS = (() => {
+  const raw = process.env.CURSOR_STREAM_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw === "") return 90000;
+  const parsed = parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 90000;
+})();
+
+/** Monotonic fingerprint of the model output a StreamCtx has accumulated. */
+export function cursorStreamProgress(ctx: StreamCtx): string {
+  return [
+    ctx.totalText.length,
+    ctx.thinkingText.length,
+    ctx.tokenDelta,
+    ctx.emittedToolCallIndex,
+    ctx.toolCalls.length,
+    ctx.pendingToolCalls.size,
+  ].join(":");
+}
+
 // Upper bound on a single Connect-RPC frame. The 4-byte length prefix can
 // declare up to 4 GiB; a corrupt or hostile upstream could send a huge length
 // that forces driveH2's rolling buffer to grow unbounded (OOM) while it waits
@@ -1107,7 +1132,8 @@ export class CursorExecutor extends BaseExecutor {
     blobStore: Map<string, Buffer> | undefined,
     clientPlatform: CursorClientPlatform | undefined,
     todoHistory: CursorTodoHistoryItem[] | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    idleTimeoutMs: number = CURSOR_STREAM_IDLE_TIMEOUT_MS
   ): Promise<void> {
     const ackedExecIds = new Set<string>();
     // Rolling buffer: chunks arrive on `data`, get appended, and consumed
@@ -1127,6 +1153,32 @@ export class CursorExecutor extends BaseExecutor {
         teardown();
         reject(new Error("cursor-agent stream timed out"));
       }, CURSOR_STREAM_TIMEOUT_MS);
+
+      // Progress watchdog (see CURSOR_STREAM_IDLE_TIMEOUT_MS). Re-armed only when
+      // a decoded frame advances the model output, so keepalive/status frames
+      // from a stuck upstream don't keep the stream alive.
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      let lastProgress = cursorStreamProgress(ctx);
+      const armIdle = () => {
+        if (idleTimeoutMs <= 0) return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          if (ctx.endReason || settled) return;
+          debugLog("[cursor-agent] stream idle timeout fired");
+          settled = true;
+          teardown();
+          reject(
+            new Error(`cursor-agent stream timed out (no model output for ${idleTimeoutMs}ms)`)
+          );
+        }, idleTimeoutMs);
+      };
+      const noteProgress = () => {
+        const progress = cursorStreamProgress(ctx);
+        if (progress === lastProgress) return;
+        lastProgress = progress;
+        armIdle();
+      };
+      armIdle();
 
       const onData = (chunk: Buffer) => {
         if (CURSOR_DEBUG && process.env.CURSOR_DUMP_FILE) {
@@ -1160,6 +1212,7 @@ export class CursorExecutor extends BaseExecutor {
       // h2 alive (Phase 6 session reuse).
       const detachListeners = () => {
         clearTimeout(safetyTimer);
+        clearTimeout(idleTimer);
         h2.req.off("data", onData);
         h2.req.off("end", onEnd);
         h2.req.off("error", onErr);
@@ -1212,6 +1265,7 @@ export class CursorExecutor extends BaseExecutor {
                 clientPlatform,
                 todoHistory,
               });
+              noteProgress();
             } catch (err) {
               debugLog(
                 "[cursor-agent] frame decode failed at pos",

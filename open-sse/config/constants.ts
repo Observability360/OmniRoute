@@ -19,6 +19,11 @@ export const FETCH_TIMEOUT_MS = upstreamTimeouts.fetchTimeoutMs;
 // idle for this duration. Override with STREAM_IDLE_TIMEOUT_MS env var.
 export const STREAM_IDLE_TIMEOUT_MS = upstreamTimeouts.streamIdleTimeoutMs;
 
+// Max silence between chunks carrying actual model output (keepalives don't
+// count). Catches upstreams that keep an SSE stream open after readiness but
+// stop producing content. Override with STREAM_PROGRESS_TIMEOUT_MS; 0 disables.
+export const STREAM_PROGRESS_TIMEOUT_MS = upstreamTimeouts.streamProgressTimeoutMs;
+
 // Grace period (ms) a client-disconnect finalization waits for the stream's own
 // completion bookkeeping to land before persisting a 499. See #9653 — a client
 // that closes right after reading a fully-completed SSE stream can otherwise
