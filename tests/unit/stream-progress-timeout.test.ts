@@ -66,10 +66,10 @@ test("keepalive-only stream after initial output fails with stream_progress_time
     createSSEStream({
       provider: "test",
       model: "m",
-      onFailure: (p: Record<string, unknown>) => {
-        failure = p;
+      onFailure: (p) => {
+        failure = p as unknown as Record<string, unknown>;
       },
-    } as any)
+    })
   );
   await assert.rejects(new Response(stream).text(), /Progress timeout: no model output/);
   assert.equal(failure?.["code"], "stream_progress_timeout");
@@ -78,7 +78,7 @@ test("keepalive-only stream after initial output fails with stream_progress_time
 test("steady model output is not cut off by the progress watchdog", async () => {
   const source = pumpedSource(200, (i) => (i < 60 ? chunk(`t${i}`) : null));
   const text = await new Response(
-    source.pipeThrough(createSSEStream({ provider: "test", model: "m" } as any))
+    source.pipeThrough(createSSEStream({ provider: "test", model: "m" }))
   ).text();
   assert.match(text, /t59/);
 });
