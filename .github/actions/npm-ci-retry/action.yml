@@ -27,3 +27,18 @@ runs:
           sleep "$delay_seconds"
           delay_seconds=$((delay_seconds * 2))
         done
+
+    # TEMPORARY, broader than ideal: this should live only on ci.yml's `test-unit`
+    # job (Azure MAI browser-audio regression tests spawn the real ffmpeg binary,
+    # which GitHub's hosted image no longer guarantees), but this session's git
+    # token lacks the `workflow` OAuth scope needed to push a .github/workflows/*
+    # change, so every job using this shared action pays a cheap `command -v`
+    # check instead. A human with that scope should move this into test-unit's
+    # own steps in ci.yml and drop it from here.
+    # Linux-only: apt-get doesn't exist on windows-latest/macos-latest runners
+    # that also use this action (e.g. Bun SQLite Compatibility) — confirmed
+    # broken there (exit 127) before this guard was added.
+    - name: Ensure ffmpeg is present (Azure MAI audio normalization tests)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
