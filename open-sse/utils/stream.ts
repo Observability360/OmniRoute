@@ -34,7 +34,13 @@ import {
   createStructuredSSECollector,
   buildStreamSummaryFromEvents,
 } from "./streamPayloadCollector.ts";
-import { STREAM_IDLE_TIMEOUT_MS, FETCH_BODY_TIMEOUT_MS, HTTP_STATUS } from "../config/constants.ts";
+import {
+  STREAM_IDLE_TIMEOUT_MS,
+  STREAM_PROGRESS_TIMEOUT_MS,
+  FETCH_BODY_TIMEOUT_MS,
+  HTTP_STATUS,
+} from "../config/constants.ts";
+import { hasUsefulStreamContent } from "./streamReadiness.ts";
 import {
   OMIT_STREAMING_CHUNK_MARKER,
   isResponsesCommentaryMessageItem,
@@ -852,6 +858,8 @@ export function createSSEStream(options: StreamOptions = {}) {
 
   // Idle timeout state — closes stream if provider stops sending data
   let lastChunkTime = Date.now();
+  // Last time a chunk carried real model output — keepalives don't count.
+  let lastProgressTime = lastChunkTime;
   let idleTimer: ReturnType<typeof setInterval> | null = null;
   let streamTimedOut = false;
   const claudeEmptyResponseLifecycle = createClaudeEmptyResponseLifecycle();
@@ -1179,13 +1187,26 @@ export function createSSEStream(options: StreamOptions = {}) {
   return new TransformStream(
     {
       start(controller) {
-        // Start idle watchdog — checks every 10s if provider has stopped sending
-        if (STREAM_IDLE_TIMEOUT_MS > 0) {
+        // Start idle/progress watchdog — checks every 10s whether the provider has
+        // stopped sending data (idle) or stopped sending model output (progress).
+        if (STREAM_IDLE_TIMEOUT_MS > 0 || STREAM_PROGRESS_TIMEOUT_MS > 0) {
           idleTimer = setInterval(() => {
-            if (!streamTimedOut && Date.now() - lastChunkTime > STREAM_IDLE_TIMEOUT_MS) {
+            if (streamTimedOut) return;
+            const now = Date.now();
+            let timeoutMsg: string | null = null;
+            let code = "stream_idle_timeout";
+            if (STREAM_IDLE_TIMEOUT_MS > 0 && now - lastChunkTime > STREAM_IDLE_TIMEOUT_MS) {
+              timeoutMsg = `[STREAM] Idle timeout: no data from ${provider || "provider"} for ${STREAM_IDLE_TIMEOUT_MS}ms (model: ${model || "unknown"})`;
+            } else if (
+              STREAM_PROGRESS_TIMEOUT_MS > 0 &&
+              now - lastProgressTime > STREAM_PROGRESS_TIMEOUT_MS
+            ) {
+              code = "stream_progress_timeout";
+              timeoutMsg = `[STREAM] Progress timeout: no model output from ${provider || "provider"} for ${STREAM_PROGRESS_TIMEOUT_MS}ms (model: ${model || "unknown"})`;
+            }
+            if (timeoutMsg) {
               streamTimedOut = true;
               clearIdleTimer();
-              const timeoutMsg = `[STREAM] Idle timeout: no data from ${provider || "provider"} for ${STREAM_IDLE_TIMEOUT_MS}ms (model: ${model || "unknown"})`;
               console.warn(timeoutMsg);
               let failureHandled = false;
               if (onFailure) {
@@ -1195,11 +1216,11 @@ export function createSSEStream(options: StreamOptions = {}) {
                     onFailure({
                       status: HTTP_STATUS.GATEWAY_TIMEOUT,
                       message: timeoutMsg,
-                      code: "stream_idle_timeout",
+                      code,
                       type: "timeout_error",
                     }) === true;
                 } catch (e) {
-                  console.debug(`[STREAM] onFailure callback error (idle_timeout):`, e);
+                  console.debug(`[STREAM] onFailure callback error (${code}):`, e);
                 }
               }
               if (!failureHandled) {
@@ -1225,6 +1246,9 @@ export function createSSEStream(options: StreamOptions = {}) {
         timing.markByte();
         lastChunkTime = now;
         const text = decoder.decode(chunk, { stream: true });
+        if (STREAM_PROGRESS_TIMEOUT_MS > 0 && hasUsefulStreamContent(text)) {
+          lastProgressTime = now;
+        }
         buffer += text;
         reqLogger?.appendProviderChunk?.(text);
         const nlIdx = buffer.lastIndexOf("\n");
@@ -1641,10 +1665,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                         isResponsesCommentaryMessageItem
                       ).items
                     : passthroughResponsesOutputItems;
-                  const backfilled = backfillResponsesCompletedOutput(
-                    parsed,
-                    backfillCandidates
-                  );
+                  const backfilled = backfillResponsesCompletedOutput(parsed, backfillCandidates);
                   const usageNormalized = normalizeUsage(parsed);
                   if (
                     stripped ||
